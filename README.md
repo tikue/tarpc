@@ -89,7 +89,7 @@ races! See the tarpc_examples package for more examples.
 
 Here's the same server, implemented using `FutureService`.
 
-```
+```rust
 #![feature(conservative_impl_trait, plugin)]
 #![plugin(tarpc_plugins)]
 
