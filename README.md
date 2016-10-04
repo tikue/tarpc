@@ -87,6 +87,8 @@ races! See the tarpc_examples package for more examples.
 
 ## Example: Futures
 
+Here's the same server, implemented using `FutureService`.
+
 ```
 #![feature(conservative_impl_trait, plugin)]
 #![plugin(tarpc_plugins)]
