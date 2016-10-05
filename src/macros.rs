@@ -370,12 +370,13 @@ macro_rules! service {
         impl_deserialize!(__tarpc_service_Error, NotIrrefutable(()) $($fn_name($error))*);
         impl_serialize!(__tarpc_service_Error, {}, NotIrrefutable(()) $($fn_name($error))*);
 
-        /// Defines the `Future` RPC service. Implementors must be `Clone`, `Send`, and `'static`,
-        /// as required by `tokio_proto::NewService`. This is required so that the service can be used
-        /// to respond to multiple requests concurrently.
+        /// Defines the `Future` RPC service. Implementors must be `Send`, and `'static`, as
+        /// required by `tokio_proto::Service`. It must also be `Sync` to allow the service to be
+        /// used to respond to multiple requests concurrently.
         pub trait FutureService:
             ::std::marker::Send +
-            ::std::clone::Clone +
+            ::std::marker::Sync +
+            ::std::marker::Sized +
             'static
         {
             $(
@@ -399,7 +400,6 @@ macro_rules! service {
                 return $crate::listen(addr, __tarpc_service_AsyncServer(self));
 
                 #[allow(non_camel_case_types)]
-                #[derive(Clone)]
                 struct __tarpc_service_AsyncServer<S>(S);
 
                 impl<S> ::std::fmt::Debug for __tarpc_service_AsyncServer<S> {
@@ -497,12 +497,13 @@ macro_rules! service {
             }
         }
 
-        /// Defines the blocking RPC service. Must be `Clone`, `Send`, and `'static`,
-        /// as required by `tokio_proto::NewService`. This is required so that the service can be used
-        /// to respond to multiple requests concurrently.
+        /// Defines the blocking RPC service. Implementors must be `Send`, and `'static`, as
+        /// required by `tokio_proto::Service`. It must also be `Sync` to allow the service to be
+        /// used to respond to multiple requests concurrently.
         pub trait SyncService:
             ::std::marker::Send +
-            ::std::clone::Clone +
+            ::std::marker::Sync +
+            ::std::marker::Sized +
             'static
         {
             $(
@@ -528,13 +529,12 @@ macro_rules! service {
                 };
 
                 let __tarpc_service_service = __SyncServer {
-                    service: self,
+                    service: $crate::util::ArcService::new(self),
                 };
                 return $crate::futures::Future::wait(FutureServiceExt::listen(__tarpc_service_service, addr));
 
-                #[derive(Clone)]
                 struct __SyncServer<S> {
-                    service: S,
+                    service: $crate::util::ArcService<S>,
                 }
 
                 #[allow(non_camel_case_types)]
@@ -557,12 +557,12 @@ macro_rules! service {
                             }
                             let (__tarpc_service_complete, __tarpc_service_promise) =
                                 $crate::futures::oneshot();
-                            let __tarpc_service_service = self.clone();
+                            let __tarpc_service_service = self.service.clone();
                             const UNIMPLEMENTED: fn($crate::futures::Canceled) -> $error =
                                 unimplemented;
                             ::std::thread::spawn(move || {
                                 let __tarpc_service_reply = SyncService::$fn_name(
-                                    &__tarpc_service_service.service, $($arg),*);
+                                    &*__tarpc_service_service, $($arg),*);
                                 __tarpc_service_complete.complete(
                                     $crate::futures::IntoFuture::into_future(
                                         __tarpc_service_reply));
@@ -747,7 +747,6 @@ mod functional_test {
         use sync::Connect;
         use util::Never;
 
-        #[derive(Clone, Copy)]
         struct Server;
 
         impl SyncService for Server {
@@ -788,7 +787,6 @@ mod functional_test {
         use super::env_logger;
         use util::Never;
 
-        #[derive(Clone)]
         struct Server;
 
         impl FutureService for Server {
@@ -833,7 +831,6 @@ mod functional_test {
         }
     }
 
-    #[derive(Clone)]
     struct ErrorServer;
 
     impl error_service::FutureService for ErrorServer {

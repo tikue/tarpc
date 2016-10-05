@@ -3,9 +3,12 @@
 // Licensed under the MIT License, <LICENSE or http://opensource.org/licenses/MIT>.
 // This file may not be copied, modified, or distributed except according to those terms.
 
-use futures::{Future, Poll};
+use futures::{Future, Poll, Async};
 use futures::stream::Stream;
+use tokio_service::Service;
 use std::fmt;
+use std::sync::Arc;
+use std::ops::Deref;
 use std::error::Error;
 use std::net::{SocketAddr, ToSocketAddrs};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -110,3 +113,41 @@ pub trait FirstSocketAddr: ToSocketAddrs {
 }
 
 impl<A: ToSocketAddrs> FirstSocketAddr for A {}
+
+/// A reference counted wrapper to a `tokio_proto::Service`.
+///
+/// This wrapper is used to enabled sharing of a service between multiple concurrent workers.
+pub struct ArcService<T>(Arc<T>);
+
+impl<T> ArcService<T> {
+    /// Create a new reference counter `Service`.
+    pub fn new(t: T) -> Self {
+        ArcService(Arc::new(t))
+    }
+}
+
+impl<T: Service> Service for ArcService<T> {
+    type Request = T::Request;
+    type Response = T::Response;
+    type Error = T::Error;
+    type Future = T::Future;
+    fn call(&self, req: Self::Request) -> Self::Future {
+        self.0.call(req)
+    }
+    fn poll_ready(&self) -> Async<()> {
+        self.0.poll_ready()
+    }
+}
+
+impl<T> Clone for ArcService<T> {
+    fn clone(&self) -> Self {
+        ArcService(self.0.clone())
+    }
+}
+
+impl<T> Deref for ArcService<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &*self.0
+    }
+}
