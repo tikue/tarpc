@@ -15,40 +15,41 @@ use std::net::SocketAddr;
 use tokio_core::reactor::Handle;
 use tokio_proto::{self as proto, multiplex};
 use tokio_proto::server::{self, ServerHandle};
-use tokio_service::NewService;
-use util::Never;
+use tokio_service::Service;
+use util::{Never, ArcService};
 
 /// A message from server to client.
 pub type Response<T, E> = proto::Message<Result<T, WireError<E>>, Empty<Never, io::Error>>;
 
 /// Spawns a service that binds to the given address and runs on the default reactor core.
-pub fn listen<S, Req, Resp, E>(addr: SocketAddr, new_service: S) -> ListenFuture
-    where S: NewService<Request = Result<Req, DeserializeError>,
+pub fn listen<S, Req, Resp, E>(addr: SocketAddr, service: S) -> ListenFuture
+    where S: Sync + Send + 'static + Service<Request = Result<Req, DeserializeError>,
                         Response = Response<Resp, E>,
-                        Error = io::Error> + Send + 'static,
+                        Error = io::Error>,
           Req: Deserialize,
           Resp: Serialize,
           E: Serialize,
 {
     let (tx, rx) = futures::oneshot();
     REMOTE.spawn(move |handle| {
-        Ok(tx.complete(listen_with(addr, new_service, handle)))
+        Ok(tx.complete(listen_with(addr, service, handle)))
     });
     ListenFuture { inner: rx }
 }
 
 /// Spawns a service that binds to the given address using the given handle.
-pub fn listen_with<S, Req, Resp, E>(addr: SocketAddr, new_service: S, handle: &Handle)
+pub fn listen_with<S, Req, Resp, E>(addr: SocketAddr, service: S, handle: &Handle)
     -> io::Result<ServerHandle>
-    where S: NewService<Request = Result<Req, DeserializeError>,
+    where S: Sync + Send + 'static + Service<Request = Result<Req, DeserializeError>,
                         Response = Response<Resp, E>,
-                        Error = io::Error> + Send + 'static,
+                        Error = io::Error>,
           Req: Deserialize,
           Resp: Serialize,
           E: Serialize,
 {
+    let s = ArcService::new(service);
     server::listen(handle, addr, move |stream| {
-            Ok(multiplex::Server::new(new_service.new_service()?, Framed::new(stream)))
+            Ok(multiplex::Server::new(s.clone(), Framed::new(stream)))
         })
 }
 
