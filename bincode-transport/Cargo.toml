@@ -19,10 +19,10 @@ tokio-tcp = "0.1"
 tokio-serde = "0.2"
 
 [target.'cfg(not(test))'.dependencies]
-futures-preview = { git = "https://github.com/rust-lang-nursery/futures-rs", features = ["compat"] }
+futures-preview = { version = "0.3.0-alpha.7", features = ["compat"] }
 
 [dev-dependencies]
-futures-preview = { git = "https://github.com/rust-lang-nursery/futures-rs", features = ["compat", "tokio-compat"] }
+futures-preview = { version = "0.3.0-alpha.7", features = ["compat", "tokio-compat"] }
 env_logger = "0.5"
 humantime = "1.0"
 log = "0.4"

@@ -1,9 +1,10 @@
 //! Transports backed by in-memory channels.
 
 use crate::Transport;
-use futures::{channel::mpsc, task, Poll, Sink, Stream};
+use futures::{channel::mpsc, Poll, Sink, Stream};
 use pin_utils::unsafe_pinned;
-use std::pin::PinMut;
+use std::pin::Pin;
+use std::task::LocalWaker;
 use std::{
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -39,8 +40,8 @@ impl<Item, SinkItem> UnboundedChannel<Item, SinkItem> {
 impl<Item, SinkItem> Stream for UnboundedChannel<Item, SinkItem> {
     type Item = Result<Item, io::Error>;
 
-    fn poll_next(mut self: PinMut<Self>, cx: &mut task::Context) -> Poll<Option<io::Result<Item>>> {
-        self.rx().poll_next(cx).map(|option| option.map(Ok))
+    fn poll_next(mut self: Pin<Self>, lw: &LocalWaker) -> Poll<Option<io::Result<Item>>> {
+        self.rx().poll_next(lw).map(|option| option.map(Ok))
     }
 }
 
@@ -48,30 +49,30 @@ impl<Item, SinkItem> Sink for UnboundedChannel<Item, SinkItem> {
     type SinkItem = SinkItem;
     type SinkError = io::Error;
 
-    fn poll_ready(mut self: PinMut<Self>, cx: &mut task::Context) -> Poll<io::Result<()>> {
+    fn poll_ready(mut self: Pin<Self>, lw: &LocalWaker) -> Poll<io::Result<()>> {
         self.tx()
-            .poll_ready(cx)
+            .poll_ready(lw)
             .map_err(|_| io::Error::from(io::ErrorKind::NotConnected))
     }
 
-    fn start_send(mut self: PinMut<Self>, item: SinkItem) -> io::Result<()> {
+    fn start_send(mut self: Pin<Self>, item: SinkItem) -> io::Result<()> {
         self.tx()
             .start_send(item)
             .map_err(|_| io::Error::from(io::ErrorKind::NotConnected))
     }
 
     fn poll_flush(
-        mut self: PinMut<Self>,
-        cx: &mut task::Context,
+        mut self: Pin<Self>,
+        lw: &LocalWaker,
     ) -> Poll<Result<(), Self::SinkError>> {
         self.tx()
-            .poll_flush(cx)
+            .poll_flush(lw)
             .map_err(|_| io::Error::from(io::ErrorKind::NotConnected))
     }
 
-    fn poll_close(mut self: PinMut<Self>, cx: &mut task::Context) -> Poll<io::Result<()>> {
+    fn poll_close(mut self: Pin<Self>, lw: &LocalWaker) -> Poll<io::Result<()>> {
         self.tx()
-            .poll_close(cx)
+            .poll_close(lw)
             .map_err(|_| io::Error::from(io::ErrorKind::NotConnected))
     }
 }

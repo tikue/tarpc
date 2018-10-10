@@ -1,9 +1,9 @@
 use futures::Stream;
-use std::future::set_task_cx;
+use std::future::set_task_waker;
 use std::marker::Unpin;
 use std::ops::{Generator, GeneratorState};
-use std::pin::PinMut;
-use std::task::{self, Poll};
+use std::pin::Pin;
+use std::task::{LocalWaker, Poll};
 
 /// Wrap a future in a generator.
 ///
@@ -25,9 +25,9 @@ impl<U, T: Generator<Yield = Poll<U>, Return = ()>> !Unpin for GenStream<T> {}
 
 impl<U, T: Generator<Yield = Poll<U>, Return = ()>> Stream for GenStream<T> {
     type Item = U;
-    fn poll_next(self: PinMut<Self>, cx: &mut task::Context) -> Poll<Option<Self::Item>> {
-        set_task_cx(cx, || {
-            match unsafe { PinMut::get_mut_unchecked(self).0.resume() } {
+    fn poll_next(self: Pin<Self>, lw: &LocalWaker) -> Poll<Option<Self::Item>> {
+        set_task_waker(lw, || {
+            match unsafe { Pin::get_mut_unchecked(self).0.resume() } {
                 GeneratorState::Yielded(Poll::Ready(item)) => Poll::Ready(Some(item)),
                 GeneratorState::Yielded(Poll::Pending) => Poll::Pending,
                 GeneratorState::Complete(()) => Poll::Ready(None),

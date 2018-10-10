@@ -1,6 +1,8 @@
 //! Provides a client that connects to a server and sends multiplexed requests.
 
 use crate::{context::Context, ClientMessage, Response, Transport};
+use futures::executor::ThreadPool;
+use futures::task::Spawn;
 use log::warn;
 use std::{
     io,
@@ -27,7 +29,8 @@ impl<Req, Resp> Clone for Client<Req, Resp> {
 /// Settings that control the behavior of the client.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
-pub struct Config {
+pub struct Config
+{
     /// The number of requests that can be in flight at once.
     /// `max_in_flight_requests` controls the size of the map used by the client
     /// for storing pending requests.
@@ -43,6 +46,7 @@ impl Default for Config {
         Config {
             max_in_flight_requests: 1_000,
             pending_request_buffer: 100,
+            spawner: ThreadPool::new(),
         }
     }
 }
@@ -56,7 +60,8 @@ where
     /// that manages the lifecycle of requests.
     ///
     /// Must only be called from on an executor.
-    pub async fn new<T>(config: Config, transport: T) -> Self
+    /// And pass in a clone of the executor.
+    pub async fn new<T>(config: Config, transport: T, spawner: impl Spawn) -> Self
     where
         T: Transport<Item = Response<Resp>, SinkItem = ClientMessage<Req>> + Send,
     {
@@ -69,7 +74,7 @@ where
         });
 
         Client {
-            channel: await!(dispatch::spawn(config, transport, server_addr)),
+            channel: await!(dispatch::spawn(config, transport, server_addr, spawner)),
         }
     }
 
