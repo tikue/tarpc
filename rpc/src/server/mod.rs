@@ -11,6 +11,7 @@ use futures::{
     Poll,
     prelude::*,
     ready,
+    sink::Sink,
     stream::Fuse,
     try_ready,
 };
@@ -177,7 +178,10 @@ where
 /// Responds to all requests with `request_handler`.
 /// The server end of an open connection with a client.
 #[derive(Debug)]
-pub struct Channel<Req, Resp, T> {
+pub struct Channel<Req, Resp, T>
+where
+    T: futures::sink::Sink + futures::stream::Stream,
+{
     /// Writes responses to the wire and reads requests off the wire.
     transport: Fuse<T>,
     /// Signals the connection is closed when `Channel` is dropped.
@@ -216,7 +220,7 @@ impl<Req, Resp, T> Channel<Req, Resp, T> {
 
 impl<Req, Resp, T> Channel<Req, Resp, T>
 where
-    T: Transport<Item = ClientMessage<Req>, SinkItem = Response<Resp>> + Send,
+    T: Transport<Item = ClientMessage<Req>, SinkItem = Response<Resp>> + Send + Sink,
     Req: Send,
     Resp: Send,
 {
@@ -415,7 +419,7 @@ where
     }
 
     fn handle_request(
-        self: &mut Pin<Self>,
+        self: Pin<&mut Self>,
         lw: &LocalWaker,
         trace_context: trace::Context,
         request: Request<Req>,
