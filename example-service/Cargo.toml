@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 bincode-transport = { path = "../bincode-transport" }
-futures-preview = { version = "0.3.0-alpha.6", features = ["compat", "tokio-compat"] }
+futures-preview = { version = "0.3.0-alpha.7", features = ["compat", "tokio-compat"] }
 serde = { version = "1.0" }
 tarpc = { path = "../tarpc", features = ["serde"] }
 tarpc-plugins = { path = "../plugins" }

@@ -22,10 +22,10 @@ trace = { path = "../trace" }
 serde = { optional = true, version = "1.0" }
 
 [target.'cfg(not(test))'.dependencies]
-futures-preview = { version = "0.3.0-alpha.6", features = ["compat"] }
+futures-preview = { version = "0.3.0-alpha.7", features = ["compat"] }
 
 [dev-dependencies]
-futures-preview = { version = "0.3.0-alpha.6", features = ["compat", "tokio-compat"] }
-futures-test-preview = { version = "0.3.0-alpha.6" }
+futures-preview = { version = "0.3.0-alpha.7", features = ["compat", "tokio-compat"] }
+futures-test-preview = { version = "0.3.0-alpha.7" }
 env_logger = "0.5"
 tokio = "0.1"
