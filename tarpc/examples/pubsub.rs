@@ -7,7 +7,6 @@
 #![feature(async_await, existential_type)]
 
 use futures::{
-    compat::Executor01CompatExt,
     future::{self, Ready},
     prelude::*,
     Future,
@@ -115,7 +114,7 @@ impl publisher::Publisher for Publisher {
         ) -> io::Result<()> {
             let conn = bincode_transport::connect(&addr).await?;
             let subscriber =
-                subscriber::subscriber_stub(client::Config::default(), conn).await?;
+                subscriber::subscriber_stub(client::Config::default(), conn).spawn()?;
             eprintln!("Subscribing {}.", id);
             clients.lock().unwrap().insert(id, subscriber);
             Ok(())
@@ -159,7 +158,7 @@ async fn main() -> io::Result<()> {
     let publisher_conn = bincode_transport::connect(&publisher_addr);
     let publisher_conn = publisher_conn.await?;
     let mut publisher =
-        publisher::publisher_stub(client::Config::default(), publisher_conn).await?;
+        publisher::publisher_stub(client::Config::default(), publisher_conn).spawn()?;
 
     if let Err(e) = publisher
         .subscribe(context::current(), 0, subscriber1)

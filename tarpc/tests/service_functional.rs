@@ -1,13 +1,37 @@
 #![feature(async_await)]
 
+
 use assert_matches::assert_matches;
 use futures::{
     future::{ready, Ready},
     prelude::*,
 };
-#[cfg(feature = "serde1")]
-use std::io;
-use tarpc::{client, context, server::Handler, transport::channel};
+use std::{rc::Rc, io};
+use tarpc::{
+    client::{self, NewClient}, context,
+    server::{self, BaseChannel, Channel, Handler},
+    transport::channel,
+};
+
+trait RuntimeExt {
+    fn exec_bg(&mut self, future: impl Future<Output = ()> + 'static);
+    fn exec<F, T, E>(&mut self, future: F) -> Result<T, E>
+    where
+        F: Future<Output = Result<T, E>>;
+}
+
+impl RuntimeExt for tokio::runtime::current_thread::Runtime {
+    fn exec_bg(&mut self, future: impl Future<Output = ()> + 'static) {
+        self.spawn(Box::pin(future.unit_error()).compat());
+    }
+
+    fn exec<F, T, E>(&mut self, future: F) -> Result<T, E>
+    where
+        F: Future<Output = Result<T, E>>,
+    {
+        self.block_on(futures::compat::Compat::new(Box::pin(future)))
+    }
+}
 
 #[tarpc_plugins::service]
 trait Service {
@@ -33,25 +57,25 @@ impl Service for Server {
 }
 
 #[runtime::test(runtime_tokio::TokioCurrentThread)]
-async fn sequential() {
+async fn sequential() -> io::Result<()> {
     let _ = env_logger::try_init();
 
     let (tx, rx) = channel::unbounded();
+
     let _ = runtime::spawn(
-        tarpc::Server::default()
-            .incoming(stream::once(ready(rx)))
-            .respond_with(serve_service(Server)),
+        BaseChannel::new(server::Config::default(), rx)
+            .respond_with(serve_service(Server))
+            .execute()
     );
 
-    let mut client = service_stub(client::Config::default(), tx).await.unwrap();
-    assert_eq!(3, client.add(context::current(), 1, 2).await.unwrap());
-    assert_eq!(
-        "Hey, Tim.",
-        client
-            .hey(context::current(), "Tim".to_string())
-            .await
-            .unwrap()
-    );
+    let mut client = service_stub(client::Config::default(), tx).spawn()?;
+
+    assert_matches!(client.add(context::current(), 1, 2).await, Ok(3));
+    assert_matches!(
+        client.hey(context::current(), "Tim".into()).await,
+        Ok(ref s) if s == "Hey, Tim.");
+
+    Ok(())
 }
 
 #[cfg(feature = "serde1")]
@@ -68,7 +92,7 @@ async fn serde() -> io::Result<()> {
     );
 
     let transport = bincode_transport::connect(&addr).await?;
-    let mut client = service_stub(client::Config::default(), transport).await?;
+    let mut client = service_stub(client::Config::default(), transport).spawn()?;
 
     assert_matches!(client.add(context::current(), 1, 2).await, Ok(3));
     assert_matches!(
@@ -80,7 +104,7 @@ async fn serde() -> io::Result<()> {
 }
 
 #[runtime::test(runtime_tokio::TokioCurrentThread)]
-async fn concurrent() {
+async fn concurrent() -> io::Result<()> {
     let _ = env_logger::try_init();
 
     let (tx, rx) = channel::unbounded();
@@ -90,7 +114,7 @@ async fn concurrent() {
             .respond_with(serve_service(Server)),
     );
 
-    let client = service_stub(client::Config::default(), tx).await.unwrap();
+    let client = service_stub(client::Config::default(), tx).spawn()?;
 
     let mut c = client.clone();
     let req1 = c.add(context::current(), 1, 2);
@@ -101,7 +125,67 @@ async fn concurrent() {
     let mut c = client.clone();
     let req3 = c.hey(context::current(), "Tim".to_string());
 
-    assert_eq!(3, req1.await.unwrap());
-    assert_eq!(7, req2.await.unwrap());
-    assert_eq!("Hey, Tim.", req3.await.unwrap());
+    assert_matches!(req1.await, Ok(3));
+    assert_matches!(req2.await, Ok(7));
+    assert_matches!(req3.await, Ok(ref s) if s == "Hey, Tim.");
+
+    Ok(())
+}
+
+#[tarpc::service(derive_serde = false)]
+trait InMemory {
+    async fn strong_count(rc: Rc<()>) -> usize;
+    async fn weak_count(rc: Rc<()>) -> usize;
+}
+
+impl InMemory for () {
+    type StrongCountFut = Ready<usize>;
+    fn strong_count(self, _: context::Context, rc: Rc<()>) -> Self::StrongCountFut {
+        ready(Rc::strong_count(&rc))
+    }
+
+    type WeakCountFut = Ready<usize>;
+    fn weak_count(self, _: context::Context, rc: Rc<()>) -> Self::WeakCountFut {
+        ready(Rc::weak_count(&rc))
+    }
+}
+
+#[test]
+fn in_memory_single_threaded() -> io::Result<()> {
+    use log::warn;
+
+    let _ = env_logger::try_init();
+    let mut runtime = tokio::runtime::current_thread::Runtime::new()?;
+
+    let (tx, rx) = channel::unbounded();
+
+    let server = BaseChannel::new(server::Config::default(), rx)
+        .respond_with(serve_in_memory(()))
+        .try_for_each(|r| async move { Ok(r.await) });
+    runtime.exec_bg(async {
+        if let Err(e) = server.await {
+            warn!("Error while running server: {}", e);
+        }
+    });
+
+    let NewClient{mut client, dispatch} = in_memory_stub(client::Config::default(), tx);
+    runtime.exec_bg(async move {
+        if let Err(e) = dispatch.await {
+            warn!("Error while running client dispatch: {}", e)
+        }
+    });
+
+    let rc = Rc::new(());
+    assert_matches!(
+        runtime.exec(client.strong_count(context::current(), rc.clone())),
+        Ok(2)
+    );
+
+    let _weak = Rc::downgrade(&rc);
+    assert_matches!(
+        runtime.exec(client.weak_count(context::current(), rc)),
+        Ok(1)
+    );
+
+    Ok(())
 }
