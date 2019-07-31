@@ -163,6 +163,7 @@ pub fn service(attr: TokenStream, input: TokenStream) -> TokenStream {
         ident,
         rpcs,
     } = parse_macro_input!(input as Service);
+    let vis_repeated = std::iter::repeat(vis.clone());
 
     let camel_case_fn_names: Vec<String> = rpcs
         .iter()
@@ -234,9 +235,7 @@ pub fn service(attr: TokenStream, input: TokenStream) -> TokenStream {
     let response_fut_ident = Ident::new(&response_fut_name, ident.span());
     let response_fut_ident_repeated = std::iter::repeat(response_fut_ident.clone());
     let response_fut_ident_repeated2 = response_fut_ident_repeated.clone();
-    let snake_ident = camel_to_snake(&ident.to_string());
-    let serve_ident = Ident::new(&format!("serve_{}", snake_ident), ident.span());
-    let stub_ident = Ident::new(&format!("{}_stub", snake_ident), ident.span());
+    let server_ident = Ident::new(&format!("{}Server", ident), ident.span());
 
     let derive_serialize = if derive_serde.0 {
         quote!(#[derive(serde::Serialize, serde::Deserialize)])
@@ -248,6 +247,35 @@ pub fn service(attr: TokenStream, input: TokenStream) -> TokenStream {
         #( #attrs )*
         #vis trait #ident: Clone {
             #( #types_and_fns )*
+
+            /// Returns a serving function to use with tarpc::server::Server.
+            fn serve(self) -> #server_ident<Self> {
+                #server_ident { service: self }
+            }
+        }
+
+        #[derive(Clone)]
+        #vis struct #server_ident<S> {
+            service: S,
+        }
+
+        impl<S> tarpc::server::Serve<#request_ident> for #server_ident<S>
+            where S: #ident
+        {
+            type Resp = #response_ident;
+            type Fut = #response_fut_ident<S>;
+
+            fn serve(self, ctx: tarpc::context::Context, req: #request_ident) -> Self::Fut {
+                match req {
+                    #(
+                        #request_ident_repeated::#camel_case_idents{ #arg_vars } => {
+                            #response_fut_ident_repeated2::#camel_case_idents2(
+                                #service_name_repeated2::#method_names(
+                                    self.service, ctx, #arg_vars2))
+                        }
+                    )*
+                }
+            }
         }
 
         /// The request sent over the wire from the client to the server.
@@ -276,10 +304,10 @@ pub fn service(attr: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl<S: #ident> std::future::Future for #response_fut_ident<S> {
-            type Output = std::io::Result<#response_ident>;
+            type Output = #response_ident;
 
             fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>)
-                -> std::task::Poll<std::io::Result<#response_ident>>
+                -> std::task::Poll<#response_ident>
             {
                 unsafe {
                     match std::pin::Pin::get_unchecked_mut(self) {
@@ -287,26 +315,9 @@ pub fn service(attr: TokenStream, input: TokenStream) -> TokenStream {
                             #response_fut_ident_repeated::#camel_case_idents(resp) =>
                                 std::pin::Pin::new_unchecked(resp)
                                     .poll(cx)
-                                    .map(#response_ident_repeated::#camel_case_idents2)
-                                    .map(Ok),
+                                    .map(#response_ident_repeated::#camel_case_idents2),
                         )*
                     }
-                }
-            }
-        }
-
-        /// Returns a serving function to use with tarpc::server::Server.
-        #vis fn #serve_ident<S: #ident>(service: S)
-            -> impl FnOnce(tarpc::context::Context, #request_ident) -> #response_fut_ident<S> + Clone {
-            move |ctx, req| {
-                match req {
-                    #(
-                        #request_ident_repeated::#camel_case_idents{ #arg_vars } => {
-                            #response_fut_ident_repeated2::#camel_case_idents2(
-                                #service_name_repeated2::#method_names(
-                                    service.clone(), ctx, #arg_vars2))
-                        }
-                    )*
                 }
             }
         }
@@ -316,21 +327,6 @@ pub fn service(attr: TokenStream, input: TokenStream) -> TokenStream {
         /// The client stub that makes RPC calls to the server. Exposes a Future interface.
         #vis struct #client_ident<C = tarpc::client::Channel<#request_ident, #response_ident>>(C);
 
-        /// Returns a new client stub that sends requests over the given transport.
-        #vis fn #stub_ident<T>(config: tarpc::client::Config, transport: T)
-            -> tarpc::client::NewClient<
-                #client_ident,
-                tarpc::client::channel::RequestDispatch<#request_ident, #response_ident, T>>
-        where
-            T: tarpc::Transport<tarpc::ClientMessage<#request_ident>, tarpc::Response<#response_ident>>
-        {
-            let new_client = tarpc::client::new(config, transport);
-            tarpc::client::NewClient {
-                client: #client_ident(new_client.client),
-                dispatch: new_client.dispatch,
-            }
-        }
-
         impl<C> From<C> for #client_ident<C>
             where for <'a> C: tarpc::Client<'a, #request_ident, Response = #response_ident>
         {
@@ -339,13 +335,31 @@ pub fn service(attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
+        impl #client_ident {
+            /// Returns a new client stub that sends requests over the given transport.
+            #vis fn new<T>(config: tarpc::client::Config, transport: T)
+                -> tarpc::client::NewClient<
+                    Self,
+                    tarpc::client::channel::RequestDispatch<#request_ident, #response_ident, T>>
+            where
+                T: tarpc::Transport<tarpc::ClientMessage<#request_ident>, tarpc::Response<#response_ident>>
+            {
+                let new_client = tarpc::client::new(config, transport);
+                tarpc::client::NewClient {
+                    client: #client_ident(new_client.client),
+                    dispatch: new_client.dispatch,
+                }
+            }
+
+        }
+
         impl<C> #client_ident<C>
             where for<'a> C: tarpc::Client<'a, #request_ident, Response = #response_ident>
         {
             #(
                 #[allow(unused)]
                 #( #method_attrs )*
-                pub fn #method_names(&mut self, ctx: tarpc::context::Context, #args)
+                #vis_repeated fn #method_names(&mut self, ctx: tarpc::context::Context, #args)
                     -> impl std::future::Future<Output = std::io::Result<#outputs>> + '_ {
                     let request = #request_ident_repeated2::#camel_case_idents { #arg_vars };
                     let resp = tarpc::Client::call(&mut self.0, ctx, request);

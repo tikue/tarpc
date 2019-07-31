@@ -64,11 +64,11 @@ async fn sequential() -> io::Result<()> {
 
     let _ = runtime::spawn(
         BaseChannel::new(server::Config::default(), rx)
-            .respond_with(serve_service(Server))
+            .respond_with(Server.serve())
             .execute()
     );
 
-    let mut client = service_stub(client::Config::default(), tx).spawn()?;
+    let mut client = ServiceClient::new(client::Config::default(), tx).spawn()?;
 
     assert_matches!(client.add(context::current(), 1, 2).await, Ok(3));
     assert_matches!(
@@ -88,11 +88,11 @@ async fn serde() -> io::Result<()> {
     let _ = runtime::spawn(
         tarpc::Server::default()
             .incoming(transport.take(1).filter_map(|r| async { r.ok() }))
-            .respond_with(serve_service(Server)),
+            .respond_with(Server.serve()),
     );
 
     let transport = bincode_transport::connect(&addr).await?;
-    let mut client = service_stub(client::Config::default(), transport).spawn()?;
+    let mut client = ServiceClient::new(client::Config::default(), transport).spawn()?;
 
     assert_matches!(client.add(context::current(), 1, 2).await, Ok(3));
     assert_matches!(
@@ -111,10 +111,10 @@ async fn concurrent() -> io::Result<()> {
     let _ = runtime::spawn(
         rpc::Server::default()
             .incoming(stream::once(ready(rx)))
-            .respond_with(serve_service(Server)),
+            .respond_with(Server.serve()),
     );
 
-    let client = service_stub(client::Config::default(), tx).spawn()?;
+    let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
 
     let mut c = client.clone();
     let req1 = c.add(context::current(), 1, 2);
@@ -160,7 +160,7 @@ fn in_memory_single_threaded() -> io::Result<()> {
     let (tx, rx) = channel::unbounded();
 
     let server = BaseChannel::new(server::Config::default(), rx)
-        .respond_with(serve_in_memory(()))
+        .respond_with(().serve())
         .try_for_each(|r| async move { Ok(r.await) });
     runtime.exec_bg(async {
         if let Err(e) = server.await {
@@ -168,7 +168,7 @@ fn in_memory_single_threaded() -> io::Result<()> {
         }
     });
 
-    let NewClient{mut client, dispatch} = in_memory_stub(client::Config::default(), tx);
+    let NewClient{mut client, dispatch} = InMemoryClient::new(client::Config::default(), tx);
     runtime.exec_bg(async move {
         if let Err(e) = dispatch.await {
             warn!("Error while running client dispatch: {}", e)
