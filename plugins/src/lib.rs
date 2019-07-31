@@ -396,28 +396,6 @@ fn snake_to_camel(ident_str: &str) -> String {
     camel_ty
 }
 
-// Really basic camel to snake that assumes capitals are always the start of a new segment.
-fn camel_to_snake(ident_str: &str) -> String {
-    let mut snake = String::new();
-    let mut chars = ident_str.chars();
-    if let Some(c) = chars.next() {
-        snake.extend(c.to_lowercase());
-    }
-
-    while let Some(c) = chars.next() {
-        if c.is_uppercase() {
-            // New word
-            snake.push('_');
-            snake.extend(c.to_lowercase());
-        } else {
-            // Same word
-            snake.push(c)
-        }
-    }
-
-    snake
-}
-
 #[test]
 fn snake_to_camel_basic() {
     assert_eq!(snake_to_camel("abc_def"), "AbcDef");
@@ -441,9 +419,4 @@ fn snake_to_camel_underscore_consecutive() {
 #[test]
 fn snake_to_camel_capital_in_middle() {
     assert_eq!(snake_to_camel("aBc_dEf"), "AbcDef");
-}
-
-#[test]
-fn camel_to_snake_basic() {
-    assert_eq!(camel_to_snake("AbcDef"), "abc_def");
 }
