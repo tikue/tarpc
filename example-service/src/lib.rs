@@ -12,4 +12,6 @@
 pub trait World {
     /// Returns a greeting for name.
     async fn hello(name: String) -> String;
+    /// Shuts down the server.
+    async fn shut_down();
 }
