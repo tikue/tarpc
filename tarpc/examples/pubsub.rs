@@ -67,7 +67,7 @@ impl Subscriber {
             server::new(config)
                 .incoming(incoming)
                 .take(1)
-                .respond_with(Subscriber { id }.serve()),
+                .execute(Subscriber { id }.serve()),
         );
         Ok(addr)
     }
@@ -151,7 +151,7 @@ async fn main() -> io::Result<()> {
         transport
             .take(1)
             .map(server::BaseChannel::with_defaults)
-            .respond_with(Publisher::new().serve()),
+            .execute(Publisher::new().serve()),
     );
 
     let subscriber1 = Subscriber::listen(0, server::Config::default()).await?;

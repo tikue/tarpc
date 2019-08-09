@@ -95,7 +95,7 @@ mod tests {
         tokio::spawn(
             Server::default()
                 .incoming(stream::once(future::ready(server_channel)))
-                .respond_with(|_ctx, request: String| {
+                .execute(|_ctx, request: String| {
                     future::ready(request.parse::<u64>().map_err(|_| {
                         io::Error::new(
                             io::ErrorKind::InvalidInput,

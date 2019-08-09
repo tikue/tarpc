@@ -68,7 +68,7 @@ async fn serde() -> io::Result<()> {
     tokio::spawn(
         tarpc::Server::default()
             .incoming(transport.take(1).filter_map(|r| async { r.ok() }))
-            .respond_with(Server.serve()),
+            .execute(Server.serve())
     );
 
     let transport = bincode_transport::connect(&addr).await?;
@@ -91,7 +91,7 @@ async fn concurrent() -> io::Result<()> {
     tokio::spawn(
         rpc::Server::default()
             .incoming(stream::once(ready(rx)))
-            .respond_with(Server.serve()),
+            .execute(Server.serve()),
     );
 
     let client = ServiceClient::new(client::Config::default(), tx).spawn()?;

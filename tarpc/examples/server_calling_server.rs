@@ -74,7 +74,7 @@ async fn main() -> io::Result<()> {
     let add_server = Server::default()
         .incoming(add_listener)
         .take(1)
-        .respond_with(AddServer.serve());
+        .execute(AddServer.serve());
     tokio::spawn(add_server);
 
     let to_add_server = bincode_transport::connect(&addr).await?;
@@ -86,7 +86,7 @@ async fn main() -> io::Result<()> {
     let double_server = rpc::Server::default()
         .incoming(double_listener)
         .take(1)
-        .respond_with(DoubleServer { add_client }.serve());
+        .execute(DoubleServer { add_client }.serve());
     tokio::spawn(double_server);
 
     let to_double_server = bincode_transport::connect(&addr).await?;

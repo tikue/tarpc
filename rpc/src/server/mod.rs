@@ -154,7 +154,7 @@ where
 
     /// Responds to all requests with `server`.
     #[cfg(feature = "tokio1")]
-    fn respond_with<S>(self, server: S) -> Running<Self, S>
+    fn execute<S>(self, server: S) -> Running<Self, S>
     where
         S: Serve<C::Req, Resp = C::Resp>,
     {
@@ -240,6 +240,24 @@ where
     }
 }
 
+impl<Req, Resp, T> BaseChannel<Req, Resp, T>
+where
+    T: Transport<Response<Resp>, ClientMessage<Req>> + 'static,
+    Req: Send + 'static,
+    Resp: Send + 'static,
+{
+    /// Respond to requests coming over the channel with `f`. Returns a future that drives the
+    /// responses and resolves when the connection is closed.
+    pub fn execute<S>(self, server: S) -> impl Future<Output = ()>
+    where
+        S: Serve<Req, Resp = Resp> + Send + 'static,
+        S::Fut: Send + 'static,
+    {
+        self.respond_with(server).execute()
+    }
+}
+
+
 /// The server end of an open connection with a client, streaming in requests from, and sinking
 /// responses to, the client.
 ///
@@ -276,8 +294,8 @@ where
     /// to the Channel.
     fn start_request(self: Pin<&mut Self>, request_id: u64) -> AbortRegistration;
 
-    /// Respond to requests coming over the channel with `f`. Returns a future that drives the
-    /// responses and resolves when the connection is closed.
+    /// Respond to requests coming over the channel with `f`. Returns a [`Stream`]
+    /// response handlers and completes when the connection is closed.
     fn respond_with<S>(self, server: S) -> ClientHandler<Self, S>
     where
         S: Serve<Self::Req, Resp = Self::Resp>,
