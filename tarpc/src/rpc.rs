@@ -63,7 +63,7 @@ pub enum ClientMessage<T> {
 }
 
 /// A request from a client to a server.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde1", derive(serde::Serialize, serde::Deserialize))]
 pub struct Request<T> {
@@ -76,10 +76,14 @@ pub struct Request<T> {
 }
 
 /// A response from a server to a client.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde1", derive(serde::Serialize, serde::Deserialize))]
 pub struct Response<T> {
+    /// Server-side Context. This will not be serialized. It is primarily useful for communicaiton
+    /// between the application and transport layers.
+    #[cfg_attr(feature = "serde1", serde(skip))]
+    pub context: context::Context,
     /// The ID of the request being responded to.
     pub request_id: u64,
     /// The response body, or an error if the request failed.
