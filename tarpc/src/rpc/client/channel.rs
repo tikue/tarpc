@@ -120,7 +120,6 @@ impl<Req, Resp> Channel<Req, Resp> {
                     complete: false,
                     request_id,
                     cancellation,
-                    ctx,
                 },
             ),
         }
@@ -148,7 +147,6 @@ impl<Req, Resp> Channel<Req, Resp> {
 #[derive(Debug)]
 struct DispatchResponse<Resp> {
     response: oneshot::Receiver<Response<Resp>>,
-    ctx: context::Context,
     complete: bool,
     cancellation: RequestCancellation,
     request_id: u64,
@@ -380,10 +378,7 @@ where
         let request = ClientMessage::Request(Request {
             id: request_id,
             message: dispatch_request.request,
-            context: context::Context {
-                deadline: dispatch_request.ctx.deadline,
-                trace_context: dispatch_request.ctx.trace_context,
-            },
+            context: dispatch_request.ctx.clone(),
         });
         self.as_mut().project().transport.start_send(request)?;
         self.as_mut().project().in_flight_requests.insert(
@@ -732,7 +727,6 @@ mod tests {
             cancellation,
             complete: false,
             request_id: 3,
-            ctx: context::current(),
         });
         // resp's drop() is run, which should send a cancel message.
         assert_eq!(canceled_requests.0.try_next().unwrap(), Some(3));
@@ -768,6 +762,7 @@ mod tests {
         send_response(
             &mut server_channel,
             Response {
+                context: Default::default(),
                 request_id: 0,
                 message: Ok("hello".into()),
             },

@@ -306,9 +306,21 @@ fn transform_method(method: &mut ImplItemMethod) -> ImplItemType {
     let fut_name_ident = Ident::new(&fut_name, method.sig.ident.span());
 
     // generate the updated return signature.
+    if method.sig.generics.params.is_empty() {
+        if let Some(arg) = method.sig.inputs.iter_mut().skip(1).next() {
+            if let FnArg::Typed(PatType { ty, .. }) = arg {
+                if let &mut Type::Reference(ref mut reference) = ty.as_mut() {
+                    if reference.lifetime.is_none() {
+                        method.sig.generics = parse_quote! { <'a> };
+                        reference.lifetime = parse_quote! { 'a };
+                    }
+                }
+            }
+        }
+    }
     method.sig.output = parse_quote! {
         -> ::core::pin::Pin<Box<
-                dyn ::core::future::Future<Output = #ret> + ::core::marker::Send
+                dyn ::core::future::Future<Output = #ret> + Send + 'a
             >>
     };
 
@@ -322,7 +334,7 @@ fn transform_method(method: &mut ImplItemMethod) -> ImplItemType {
 
     // generate and return type declaration for return type.
     let t: ImplItemType = parse_quote! {
-        type #fut_name_ident = ::core::pin::Pin<Box<dyn ::core::future::Future<Output = #ret> + ::core::marker::Send>>;
+        type #fut_name_ident<'a> = ::core::pin::Pin<Box<dyn ::core::future::Future<Output = #ret> + Send +  'a>>;
     };
 
     t
@@ -456,10 +468,10 @@ impl<'a> ServiceGenerator<'a> {
                     let ty_doc = format!("The response future returned by {}.", ident);
                     quote! {
                         #[doc = #ty_doc]
-                        type #future_type: std::future::Future<Output = #output>;
+                        type #future_type<'a>: std::future::Future<Output = #output> + Send + 'a;
 
                         #( #attrs )*
-                        fn #ident(self, context: tarpc::context::Context, #( #args ),*) -> Self::#future_type;
+                        fn #ident<'a>(self, context: &'a mut tarpc::context::Context, #( #args ),*) -> Self::#future_type<'a>;
                     }
                 },
             );
@@ -509,9 +521,9 @@ impl<'a> ServiceGenerator<'a> {
                 where S: #service_ident
             {
                 type Resp = #response_ident;
-                type Fut = #response_fut_ident<S>;
+                type Fut<'a> = #response_fut_ident<'a, S>;
 
-                fn serve(self, ctx: tarpc::context::Context, req: #request_ident) -> Self::Fut {
+                fn serve<'a>(self, ctx: &'a mut tarpc::context::Context, req: #request_ident) -> Self::Fut<'a> {
                     match req {
                         #(
                             #request_ident::#camel_case_idents{ #( #arg_pats ),* } => {
@@ -580,8 +592,9 @@ impl<'a> ServiceGenerator<'a> {
 
         quote! {
             /// A future resolving to a server response.
-            #vis enum #response_fut_ident<S: #service_ident> {
-                #( #camel_case_idents(<S as #service_ident>::#future_types) ),*
+            #vis enum #response_fut_ident<'a, S: #service_ident> {
+                #( #camel_case_idents(<S as #service_ident>::#future_types<'a>), )*
+                __Unreachable(&'a ()),
             }
         }
     }
@@ -595,7 +608,7 @@ impl<'a> ServiceGenerator<'a> {
         } = self;
 
         quote! {
-            impl<S: #service_ident> std::fmt::Debug for #response_fut_ident<S> {
+            impl<S: #service_ident> std::fmt::Debug for #response_fut_ident<'_, S> {
                 fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
                     fmt.debug_struct(#response_fut_name).finish()
                 }
@@ -613,7 +626,7 @@ impl<'a> ServiceGenerator<'a> {
         } = self;
 
         quote! {
-            impl<S: #service_ident> std::future::Future for #response_fut_ident<S> {
+            impl<S: #service_ident> std::future::Future for #response_fut_ident<'_, S> {
                 type Output = #response_ident;
 
                 fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>)
@@ -627,6 +640,7 @@ impl<'a> ServiceGenerator<'a> {
                                         .poll(cx)
                                         .map(#response_ident::#camel_case_idents),
                             )*
+                            _ => unreachable!(),
                         }
                     }
                 }

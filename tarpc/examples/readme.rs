@@ -4,10 +4,10 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
-use futures::{
-    future::{self, Ready},
-    prelude::*,
-};
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+
+use futures::prelude::*;
 use std::io;
 use tarpc::{
     client, context,
@@ -27,14 +27,10 @@ pub trait World {
 #[derive(Clone)]
 struct HelloServer;
 
+#[tarpc::server]
 impl World for HelloServer {
-    // Each defined rpc generates two items in the trait, a fn that serves the RPC, and
-    // an associated type representing the future output by the fn.
-
-    type HelloFut = Ready<String>;
-
-    fn hello(self, _: context::Context, name: String) -> Self::HelloFut {
-        future::ready(format!("Hello, {}!", name))
+    async fn hello(self, _: &mut context::Context, name: String) -> String {
+        format!("Hello, {}!", name)
     }
 }
 

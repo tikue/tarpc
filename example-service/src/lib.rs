@@ -4,6 +4,9 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+#![feature(generic_associated_types)]
+#![allow(incomplete_features)]
+
 /// This is the service definition. It looks a lot like a trait definition.
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
 #[tarpc::service]

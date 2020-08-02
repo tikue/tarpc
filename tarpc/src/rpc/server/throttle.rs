@@ -63,6 +63,7 @@ where
                     );
 
                     self.as_mut().start_send(Response {
+                        context: request.context,
                         request_id: request.id,
                         message: Err(ServerError {
                             kind: io::ErrorKind::WouldBlock,
@@ -303,6 +304,8 @@ fn throttler_poll_next_throttled_sink_not_ready() {
 
 #[test]
 fn throttler_start_send() {
+    use assert_matches::assert_matches;
+
     let throttler = Throttler {
         max_in_flight_requests: 0,
         inner: FakeChannel::default::<isize, isize>(),
@@ -313,16 +316,14 @@ fn throttler_start_send() {
     throttler
         .as_mut()
         .start_send(Response {
+            context: Default::default(),
             request_id: 0,
             message: Ok(1),
         })
         .unwrap();
     assert!(throttler.inner.in_flight_requests.is_empty());
-    assert_eq!(
-        throttler.inner.sink.get(0),
-        Some(&Response {
-            request_id: 0,
-            message: Ok(1),
-        })
-    );
+    let resp = throttler.inner.sink.get(0);
+    assert_matches!(resp, Some(_));
+    assert_eq!(resp.unwrap().request_id, 0);
+    assert_eq!(resp.unwrap().message, Ok(1));
 }

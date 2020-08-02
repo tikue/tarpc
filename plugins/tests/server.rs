@@ -1,3 +1,6 @@
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+
 use assert_type_eq::assert_type_eq;
 use futures::Future;
 use std::pin::Pin;
@@ -16,33 +19,38 @@ trait Foo {
 fn type_generation_works() {
     #[tarpc::server]
     impl Foo for () {
-        async fn two_part(self, _: context::Context, s: String, i: i32) -> (String, i32) {
+        async fn two_part<'a>(
+            self,
+            _: &'a mut context::Context,
+            s: String,
+            i: i32,
+        ) -> (String, i32) {
             (s, i)
         }
 
-        async fn bar(self, _: context::Context, s: String) -> String {
+        async fn bar<'a>(self, _: &'a mut context::Context, s: String) -> String {
             s
         }
 
-        async fn baz(self, _: context::Context) {}
+        async fn baz<'a>(self, _: &'a mut context::Context) {}
     }
 
     // the assert_type_eq macro can only be used once per block.
     {
         assert_type_eq!(
-            <() as Foo>::TwoPartFut,
+            <() as Foo>::TwoPartFut<'_>,
             Pin<Box<dyn Future<Output = (String, i32)> + Send>>
         );
     }
     {
         assert_type_eq!(
-            <() as Foo>::BarFut,
+            <() as Foo>::BarFut<'_>,
             Pin<Box<dyn Future<Output = String> + Send>>
         );
     }
     {
         assert_type_eq!(
-            <() as Foo>::BazFut,
+            <() as Foo>::BazFut<'_>,
             Pin<Box<dyn Future<Output = ()> + Send>>
         );
     }
@@ -62,20 +70,20 @@ fn raw_idents_work() {
 
     #[tarpc::server]
     impl r#trait for () {
-        async fn r#await(
+        async fn r#await<'a>(
             self,
-            _: context::Context,
+            _: &'a mut context::Context,
             r#struct: r#yield,
             r#enum: i32,
         ) -> (r#yield, i32) {
             (r#struct, r#enum)
         }
 
-        async fn r#fn(self, _: context::Context, r#impl: r#yield) -> r#yield {
+        async fn r#fn<'a>(self, _: &'a mut context::Context, r#impl: r#yield) -> r#yield {
             r#impl
         }
 
-        async fn r#async(self, _: context::Context) {}
+        async fn r#async<'a>(self, _: &'a mut context::Context) {}
     }
 }
 
@@ -83,6 +91,7 @@ fn raw_idents_work() {
 fn syntax() {
     #[tarpc::service]
     trait Syntax {
+        async fn no_lifetimes();
         #[deny(warnings)]
         #[allow(non_snake_case)]
         async fn TestCamelCaseDoesntConflict();
@@ -103,42 +112,60 @@ fn syntax() {
 
     #[tarpc::server]
     impl Syntax for () {
+        async fn no_lifetimes(self, _: &mut context::Context) {}
+
         #[deny(warnings)]
         #[allow(non_snake_case)]
-        async fn TestCamelCaseDoesntConflict(self, _: context::Context) {}
+        async fn TestCamelCaseDoesntConflict<'a>(self, _: &'a mut context::Context) {}
 
-        async fn hello(self, _: context::Context) -> String {
+        async fn hello<'a>(self, _: &'a mut context::Context) -> String {
             String::new()
         }
 
-        async fn attr(self, _: context::Context, _s: String) -> String {
+        async fn attr<'a>(self, _: &'a mut context::Context, _s: String) -> String {
             String::new()
         }
 
-        async fn no_args_no_return(self, _: context::Context) {}
+        async fn no_args_no_return<'a>(self, _: &'a mut context::Context) {}
 
-        async fn no_args(self, _: context::Context) -> () {}
+        async fn no_args<'a>(self, _: &'a mut context::Context) -> () {}
 
-        async fn one_arg(self, _: context::Context, _one: String) -> i32 {
+        async fn one_arg<'a>(self, _: &'a mut context::Context, _one: String) -> i32 {
             0
         }
 
-        async fn two_args_no_return(self, _: context::Context, _one: String, _two: u64) {}
+        async fn two_args_no_return<'a>(
+            self,
+            _: &'a mut context::Context,
+            _one: String,
+            _two: u64,
+        ) {
+        }
 
-        async fn two_args(self, _: context::Context, _one: String, _two: u64) -> String {
+        async fn two_args<'a>(
+            self,
+            _: &'a mut context::Context,
+            _one: String,
+            _two: u64,
+        ) -> String {
             String::new()
         }
 
-        async fn no_args_ret_error(self, _: context::Context) -> i32 {
+        async fn no_args_ret_error<'a>(self, _: &'a mut context::Context) -> i32 {
             0
         }
 
-        async fn one_arg_ret_error(self, _: context::Context, _one: String) -> String {
+        async fn one_arg_ret_error<'a>(self, _: &'a mut context::Context, _one: String) -> String {
             String::new()
         }
 
-        async fn no_arg_implicit_return_error(self, _: context::Context) {}
+        async fn no_arg_implicit_return_error<'a>(self, _: &'a mut context::Context) {}
 
-        async fn one_arg_implicit_return_error(self, _: context::Context, _one: String) {}
+        async fn one_arg_implicit_return_error<'a>(
+            self,
+            _: &'a mut context::Context,
+            _one: String,
+        ) {
+        }
     }
 }
