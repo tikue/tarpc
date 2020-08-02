@@ -291,10 +291,11 @@ where
                         return Poll::Ready(Some(Ok(request)));
                     }
                     ClientMessage::Cancel {
-                        trace_context,
+                        context,
                         request_id,
                     } => {
-                        self.as_mut().cancel_request(&trace_context, request_id);
+                        self.as_mut()
+                            .cancel_request(&context.trace_context, request_id);
                     }
                 },
                 None => return Poll::Ready(None),

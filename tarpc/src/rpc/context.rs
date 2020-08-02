@@ -65,40 +65,39 @@ assert_impl_all!(Context: Send, Sync);
 
 /// Types that may contain a Context (i.e. ClientMessage and Response).
 pub trait HasContext {
-    /// Returns a reference to the contained Context, if it exists.
-    fn context(&self) -> Option<&Context>;
-    /// Returns a mutable reference to the contained Context, if it exists.
-    fn context_mut(&mut self) -> Option<&mut Context>;
+    /// Returns a reference to the contained Context.
+    fn context(&self) -> &Context;
+    /// Returns a mutable reference to the contained Context.
+    fn context_mut(&mut self) -> &mut Context;
 }
 
 impl<T> HasContext for ClientMessage<T> {
-    fn context(&self) -> Option<&Context> {
-        if let ClientMessage::Request(Request { ref context, .. }) = *self {
-            Some(context)
-        } else {
-            None
+    fn context(&self) -> &Context {
+        match *self {
+            ClientMessage::Request(Request { ref context, .. }) => context,
+            ClientMessage::Cancel { ref context, .. } => context,
         }
     }
 
-    fn context_mut(&mut self) -> Option<&mut Context> {
-        if let ClientMessage::Request(Request {
-            ref mut context, ..
-        }) = *self
-        {
-            Some(context)
-        } else {
-            None
+    fn context_mut(&mut self) -> &mut Context {
+        match *self {
+            ClientMessage::Request(Request {
+                ref mut context, ..
+            }) => context,
+            ClientMessage::Cancel {
+                ref mut context, ..
+            } => context,
         }
     }
 }
 
 impl<T> HasContext for Response<T> {
-    fn context(&self) -> Option<&Context> {
-        Some(&self.context)
+    fn context(&self) -> &Context {
+        &self.context
     }
 
-    fn context_mut(&mut self) -> Option<&mut Context> {
-        Some(&mut self.context)
+    fn context_mut(&mut self) -> &mut Context {
+        &mut self.context
     }
 }
 

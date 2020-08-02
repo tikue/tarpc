@@ -53,10 +53,9 @@ pub enum ClientMessage<T> {
     /// not be canceled, because the framework layer does not
     /// know about them.
     Cancel {
-        /// The trace context associates the message with a specific chain of causally-related actions,
-        /// possibly orchestrated across many distributed systems.
+        /// Trace context, deadline, and other cross-cutting concerns.
         #[cfg_attr(feature = "serde", serde(default))]
-        trace_context: trace::Context,
+        context: context::Context,
         /// The ID of the request to cancel.
         request_id: u64,
     },

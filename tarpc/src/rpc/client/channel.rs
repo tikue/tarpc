@@ -398,7 +398,7 @@ where
     ) -> io::Result<()> {
         let trace_id = *context.trace_id();
         let cancel = ClientMessage::Cancel {
-            trace_context: context.trace_context,
+            context,
             request_id,
         };
         self.as_mut().project().transport.start_send(cancel)?;
