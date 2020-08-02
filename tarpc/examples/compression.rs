@@ -34,9 +34,7 @@ async fn compress<T>(message: T) -> io::Result<CompressedMessage<T>>
 where
     T: Serialize + HasContext,
 {
-    if let Some(CompressionAlgorithm::Deflate) =
-        message.context().and_then(|ctx| ctx.extensions.get())
-    {
+    if let Some(CompressionAlgorithm::Deflate) = message.context().extensions.get() {
         info!("Sending compressed.");
         let message = serialize(message)?;
         let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
@@ -76,7 +74,8 @@ where
             // Serialize on the way back
             message
                 .context_mut()
-                .map(|ctx| ctx.extensions.insert(CompressionAlgorithm::Deflate));
+                .extensions
+                .insert(CompressionAlgorithm::Deflate);
             (message, payload_len as u64)
         }
         CompressedMessage::Uncompressed(message) => {
@@ -84,9 +83,10 @@ where
             (message, serialized_size)
         }
     };
-    if let Some(ctx) = message.context_mut() {
-        ctx.extensions.insert(SerializedSize(serialized_size));
-    }
+    message
+        .context_mut()
+        .extensions
+        .insert(SerializedSize(serialized_size));
     Ok(message)
 }
 
