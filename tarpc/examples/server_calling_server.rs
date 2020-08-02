@@ -4,6 +4,9 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+
 use crate::{add::Add as AddService, double::Double as DoubleService};
 use futures::{future, prelude::*};
 use std::io;
@@ -34,7 +37,7 @@ struct AddServer;
 
 #[tarpc::server]
 impl AddService for AddServer {
-    async fn add(self, _: context::Context, x: i32, y: i32) -> i32 {
+    async fn add(self, _: &mut context::Context, x: i32, y: i32) -> i32 {
         x + y
     }
 }
@@ -46,7 +49,7 @@ struct DoubleServer {
 
 #[tarpc::server]
 impl DoubleService for DoubleServer {
-    async fn double(mut self, _: context::Context, x: i32) -> Result<i32, String> {
+    async fn double(mut self, _: &mut context::Context, x: i32) -> Result<i32, String> {
         self.add_client
             .add(context::current(), x, x)
             .await

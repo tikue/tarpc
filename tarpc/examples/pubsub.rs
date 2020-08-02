@@ -4,35 +4,39 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
-/// - The PubSub server sets up TCP listeners on 2 ports, the "subscriber" port and the "publisher"
-///   port. Because both publishers and subscribers initiate their connections to the PubSub
-///   server, the server requires no prior knowledge of either publishers or subscribers.
-///
-/// - Subscribers connect to the server on the server's "subscriber" port. Once a connection is
-///   established, the server acts as the client of the Subscriber service, initially requesting
-///   the topics the subscriber is interested in, and subsequently sending topical messages to the
-///   subscriber.
-///
-/// - Publishers connect to the server on the "publisher" port and, once connected, they send
-///   topical messages via Publisher service to the server. The server then broadcasts each
-///   messages to all clients subscribed to the topic of that message.
-///
-///       Subscriber                        Publisher                       PubSub Server
-/// T1        |                                 |                                 |             
-/// T2        |-----Connect------------------------------------------------------>|
-/// T3        |                                 |                                 |
-/// T2        |<-------------------------------------------------------Topics-----|
-/// T2        |-----(OK) Topics-------------------------------------------------->|
-/// T3        |                                 |                                 |
-/// T4        |                                 |-----Connect-------------------->|
-/// T5        |                                 |                                 |
-/// T6        |                                 |-----Publish-------------------->|
-/// T7        |                                 |                                 |
-/// T8        |<------------------------------------------------------Receive-----|
-/// T9        |-----(OK) Receive------------------------------------------------->|
-/// T10       |                                 |                                 |
-/// T11       |                                 |<--------------(OK) Publish------|
-use anyhow::anyhow;
+//! - The PubSub server sets up TCP listeners on 2 ports, the "subscriber" port and the "publisher"
+//!   port. Because both publishers and subscribers initiate their connections to the PubSub
+//!   server, the server requires no prior knowledge of either publishers or subscribers.
+//!
+//! - Subscribers connect to the server on the server's "subscriber" port. Once a connection is
+//!   established, the server acts as the client of the Subscriber service, initially requesting
+//!   the topics the subscriber is interested in, and subsequently sending topical messages to the
+//!   subscriber.
+//!
+//! - Publishers connect to the server on the "publisher" port and, once connected, they send
+//!   topical messages via Publisher service to the server. The server then broadcasts each
+//!   messages to all clients subscribed to the topic of that message.
+//!
+//!       Subscriber                        Publisher                       PubSub Server
+//! T1        |                                 |                                 |             
+//! T2        |-----Connect------------------------------------------------------>|
+//! T3        |                                 |                                 |
+//! T2        |<-------------------------------------------------------Topics-----|
+//! T2        |-----(OK) Topics-------------------------------------------------->|
+//! T3        |                                 |                                 |
+//! T4        |                                 |-----Connect-------------------->|
+//! T5        |                                 |                                 |
+//! T6        |                                 |-----Publish-------------------->|
+//! T7        |                                 |                                 |
+//! T8        |<------------------------------------------------------Receive-----|
+//! T9        |-----(OK) Receive------------------------------------------------->|
+//! T10       |                                 |                                 |
+//! T11       |                                 |<--------------(OK) Publish------|
+
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+
+use anyhow::{anyhow, Context};
 use futures::{
     channel::oneshot,
     future::{self, AbortHandle},
@@ -78,11 +82,11 @@ struct Subscriber {
 
 #[tarpc::server]
 impl subscriber::Subscriber for Subscriber {
-    async fn topics(self, _: context::Context) -> Vec<String> {
+    async fn topics(self, _: &mut context::Context) -> Vec<String> {
         self.topics.clone()
     }
 
-    async fn receive(self, _: context::Context, topic: String, message: String) {
+    async fn receive(self, _: &mut context::Context, topic: String, message: String) {
         info!(
             "[{}] received message on topic '{}': {}",
             self.local_addr, topic, message
@@ -109,7 +113,7 @@ impl Subscriber {
             .respond_with(Subscriber { local_addr, topics }.serve());
         // The first request is for the topics being subscriibed to.
         match handler.next().await {
-            Some(init_topics) => init_topics?.await,
+            Some(init_topics) => init_topics.context("Initializing topics")?.execute().await,
             None => {
                 return Err(anyhow!(
                     "[{}] Server never initialized the subscriber.",
@@ -262,7 +266,7 @@ impl Publisher {
 
 #[tarpc::server]
 impl publisher::Publisher for Publisher {
-    async fn publish(self, _: context::Context, topic: String, message: String) {
+    async fn publish(self, _: &mut context::Context, topic: String, message: String) {
         info!("received message to publish.");
         let mut subscribers = match self.subscriptions.read().unwrap().get(&topic) {
             None => return,

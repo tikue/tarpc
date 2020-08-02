@@ -1,9 +1,10 @@
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+
 use tarpc::context;
 
 #[test]
 fn att_service_trait() {
-    use futures::future::{ready, Ready};
-
     #[tarpc::service]
     trait Foo {
         async fn two_part(s: String, i: i32) -> (String, i32);
@@ -11,21 +12,22 @@ fn att_service_trait() {
         async fn baz();
     }
 
+    #[tarpc::server]
     impl Foo for () {
-        type TwoPartFut = Ready<(String, i32)>;
-        fn two_part(self, _: context::Context, s: String, i: i32) -> Self::TwoPartFut {
-            ready((s, i))
+        async fn two_part<'a>(
+            self,
+            _: &'a mut context::Context,
+            s: String,
+            i: i32,
+        ) -> (String, i32) {
+            (s, i)
         }
 
-        type BarFut = Ready<String>;
-        fn bar(self, _: context::Context, s: String) -> Self::BarFut {
-            ready(s)
+        async fn bar<'a>(self, _: &'a mut context::Context, s: String) -> String {
+            s
         }
 
-        type BazFut = Ready<()>;
-        fn baz(self, _: context::Context) -> Self::BazFut {
-            ready(())
-        }
+        async fn baz<'a>(self, _: &'a mut context::Context) {}
     }
 }
 
@@ -44,18 +46,23 @@ fn raw_idents() {
     }
 
     impl r#trait for () {
-        type AwaitFut = Ready<(r#yield, i32)>;
-        fn r#await(self, _: context::Context, r#struct: r#yield, r#enum: i32) -> Self::AwaitFut {
+        type AwaitFut<'a> = Ready<(r#yield, i32)>;
+        fn r#await<'a>(
+            self,
+            _: &'a mut context::Context,
+            r#struct: r#yield,
+            r#enum: i32,
+        ) -> Self::AwaitFut<'a> {
             ready((r#struct, r#enum))
         }
 
-        type FnFut = Ready<r#yield>;
-        fn r#fn(self, _: context::Context, r#impl: r#yield) -> Self::FnFut {
+        type FnFut<'a> = Ready<r#yield>;
+        fn r#fn<'a>(self, _: &'a mut context::Context, r#impl: r#yield) -> Self::FnFut<'a> {
             ready(r#impl)
         }
 
-        type AsyncFut = Ready<()>;
-        fn r#async(self, _: context::Context) -> Self::AsyncFut {
+        type AsyncFut<'a> = Ready<()>;
+        fn r#async<'a>(self, _: &'a mut context::Context) -> Self::AsyncFut<'a> {
             ready(())
         }
     }

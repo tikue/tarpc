@@ -200,8 +200,9 @@
 //! Use `cargo doc` as you normally would to see the documentation created for all
 //! items expanded by a `service!` invocation.
 #![deny(missing_docs)]
-#![allow(clippy::type_complexity)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![allow(clippy::type_complexity, incomplete_features)]
+#![feature(generic_associated_types)]
 
 pub mod rpc;
 pub use rpc::*;

@@ -1,6 +1,9 @@
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+
 use assert_matches::assert_matches;
 use futures::{
-    future::{join_all, ready, Ready},
+    future::{join_all, ready},
     prelude::*,
 };
 use std::io;
@@ -22,17 +25,14 @@ trait Service {
 #[derive(Clone)]
 struct Server;
 
+#[tarpc::server]
 impl Service for Server {
-    type AddFut = Ready<i32>;
-
-    fn add(self, _: context::Context, x: i32, y: i32) -> Self::AddFut {
-        ready(x + y)
+    async fn add(self, _: &mut context::Context, x: i32, y: i32) -> i32 {
+        x + y
     }
 
-    type HeyFut = Ready<String>;
-
-    fn hey(self, _: context::Context, name: String) -> Self::HeyFut {
-        ready(format!("Hey, {}.", name))
+    async fn hey(self, _: &mut context::Context, name: String) -> String {
+        format!("Hey, {}.", name)
     }
 }
 

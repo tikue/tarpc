@@ -4,6 +4,9 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+#![allow(incomplete_features)]
+#![feature(generic_associated_types)]
+
 use clap::{App, Arg};
 use futures::{future, prelude::*};
 use service::World;
@@ -24,7 +27,7 @@ struct HelloServer(SocketAddr);
 
 #[tarpc::server]
 impl World for HelloServer {
-    async fn hello(self, _: context::Context, name: String) -> String {
+    async fn hello(self, _: &mut context::Context, name: String) -> String {
         format!("Hello, {}! You are connected from {:?}.", name, self.0)
     }
 }

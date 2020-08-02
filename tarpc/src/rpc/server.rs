@@ -22,8 +22,7 @@ use futures::{
 use humantime::format_rfc3339;
 use log::{debug, trace};
 use pin_project::pin_project;
-use std::{fmt, hash::Hash, io, marker::PhantomData, pin::Pin, time::SystemTime};
-use tokio::time::Timeout;
+use std::{fmt, hash::Hash, io, marker::PhantomData, pin::Pin};
 
 mod filter;
 #[cfg(test)]
@@ -105,23 +104,10 @@ pub trait Serve<Req>: Sized + Clone {
     type Resp;
 
     /// Type of response future.
-    type Fut: Future<Output = Self::Resp>;
+    type Fut<'a>: Future<Output = Self::Resp> + Send;
 
     /// Responds to a single request.
-    fn serve(self, ctx: context::Context, req: Req) -> Self::Fut;
-}
-
-impl<Req, Resp, Fut, F> Serve<Req> for F
-where
-    F: FnOnce(context::Context, Req) -> Fut + Clone,
-    Fut: Future<Output = Resp>,
-{
-    type Resp = Resp;
-    type Fut = Fut;
-
-    fn serve(self, ctx: context::Context, req: Req) -> Self::Fut {
-        self(ctx, req)
-    }
+    fn serve<'a>(self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a>;
 }
 
 /// A utility trait enabling a stream to fluently chain a request handler.
@@ -393,10 +379,10 @@ where
     channel: C,
     /// Responses waiting to be written to the wire.
     #[pin]
-    pending_responses: Fuse<mpsc::Receiver<(context::Context, Response<C::Resp>)>>,
+    pending_responses: Fuse<mpsc::Receiver<Response<C::Resp>>>,
     /// Handed out to request handlers to fan in responses.
     #[pin]
-    responses_tx: mpsc::Sender<(context::Context, Response<C::Resp>)>,
+    responses_tx: mpsc::Sender<Response<C::Resp>>,
     /// Server
     server: S,
 }
@@ -414,9 +400,17 @@ where
     fn pump_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> PollIo<RequestHandler<S::Fut, C::Resp>> {
+    ) -> PollIo<ResponseHandler<C::Req, C::Resp, S>> {
         match ready!(self.as_mut().project().channel.poll_next(cx)?) {
-            Some(request) => Poll::Ready(Some(Ok(self.handle_request(request)))),
+            Some(request) => {
+                let abort_registration = self.as_mut().project().channel.start_request(request.id);
+                Poll::Ready(Some(Ok(ResponseHandler {
+                    request,
+                    serve: self.server.clone(),
+                    response_tx: self.responses_tx.clone(),
+                    abort_registration,
+                })))
+            }
             None => Poll::Ready(None),
         }
     }
@@ -427,10 +421,10 @@ where
         read_half_closed: bool,
     ) -> PollIo<()> {
         match self.as_mut().poll_next_response(cx)? {
-            Poll::Ready(Some((ctx, response))) => {
+            Poll::Ready(Some(response)) => {
                 trace!(
                     "[{}] Staging response. In-flight requests = {}.",
-                    ctx.trace_id(),
+                    response.context.trace_id(),
                     self.as_mut().project().channel.in_flight_requests(),
                 );
                 self.as_mut().project().channel.start_send(response)?;
@@ -460,157 +454,91 @@ where
     fn poll_next_response(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> PollIo<(context::Context, Response<C::Resp>)> {
+    ) -> PollIo<Response<C::Resp>> {
         // Ensure there's room to write a response.
         while let Poll::Pending = self.as_mut().project().channel.poll_ready(cx)? {
             ready!(self.as_mut().project().channel.poll_flush(cx)?);
         }
 
         match ready!(self.as_mut().project().pending_responses.poll_next(cx)) {
-            Some((ctx, response)) => Poll::Ready(Some(Ok((ctx, response)))),
+            Some(response) => Poll::Ready(Some(Ok(response))),
             None => {
                 // This branch likely won't happen, since the ClientHandler is holding a Sender.
                 Poll::Ready(None)
             }
         }
     }
+}
 
-    fn handle_request(
-        mut self: Pin<&mut Self>,
-        request: Request<C::Req>,
-    ) -> RequestHandler<S::Fut, C::Resp> {
-        let request_id = request.id;
+/// Executes the handling of a single request.
+#[derive(Debug)]
+pub struct ResponseHandler<Req, Res, S> {
+    request: Request<Req>,
+    serve: S,
+    response_tx: mpsc::Sender<Response<Res>>,
+    abort_registration: AbortRegistration,
+}
+
+impl<Req, Res, S> ResponseHandler<Req, Res, S>
+where
+    S: Serve<Req, Resp = Res>,
+{
+    /// Runs until response completion.
+    pub fn execute(self) -> impl Future<Output = ()> {
+        let Self {
+            abort_registration,
+            request,
+            mut response_tx,
+            serve,
+        } = self;
+        let trace_id = *request.context.trace_id();
         let deadline = request.context.deadline;
         let timeout = deadline.time_until();
         trace!(
-            "[{}] Received request with deadline {} (timeout {:?}).",
-            request.context.trace_id(),
+            "[{}] Handling request with deadline {} (timeout {:?}).",
+            trace_id,
             format_rfc3339(deadline),
             timeout,
         );
-        let ctx = request.context;
-        let request = request.message;
-
-        let response = self.as_mut().project().server.clone().serve(ctx, request);
-        let response = Resp {
-            state: RespState::PollResp,
-            request_id,
-            ctx,
-            deadline,
-            f: tokio::time::timeout(timeout, response),
-            response: None,
-            response_tx: self.as_mut().project().responses_tx.clone(),
-        };
-        let abort_registration = self.as_mut().project().channel.start_request(request_id);
-        RequestHandler {
-            resp: Abortable::new(response, abort_registration),
-        }
-    }
-}
-
-/// A future fulfilling a single client request.
-#[pin_project]
-#[derive(Debug)]
-pub struct RequestHandler<F, R> {
-    #[pin]
-    resp: Abortable<Resp<F, R>>,
-}
-
-impl<F, R> Future for RequestHandler<F, R>
-where
-    F: Future<Output = R>,
-{
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let _ = ready!(self.project().resp.poll(cx));
-        Poll::Ready(())
-    }
-}
-
-#[pin_project]
-#[derive(Debug)]
-struct Resp<F, R> {
-    state: RespState,
-    request_id: u64,
-    ctx: context::Context,
-    deadline: SystemTime,
-    #[pin]
-    f: Timeout<F>,
-    response: Option<Response<R>>,
-    #[pin]
-    response_tx: mpsc::Sender<(context::Context, Response<R>)>,
-}
-
-#[derive(Debug)]
-#[allow(clippy::enum_variant_names)]
-enum RespState {
-    PollResp,
-    PollReady,
-    PollFlush,
-}
-
-impl<F, R> Future for Resp<F, R>
-where
-    F: Future<Output = R>,
-{
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        loop {
-            match self.as_mut().project().state {
-                RespState::PollResp => {
-                    let result = ready!(self.as_mut().project().f.poll(cx));
-                    *self.as_mut().project().response = Some(Response {
-                        request_id: self.request_id,
-                        message: match result {
-                            Ok(message) => Ok(message),
-                            Err(tokio::time::Elapsed { .. }) => {
-                                debug!(
-                                    "[{}] Response did not complete before deadline of {}s.",
-                                    self.ctx.trace_id(),
-                                    format_rfc3339(self.deadline)
-                                );
-                                // No point in responding, since the client will have dropped the
-                                // request.
-                                Err(ServerError {
-                                    kind: io::ErrorKind::TimedOut,
-                                    detail: Some(format!(
-                                        "Response did not complete before deadline of {}s.",
-                                        format_rfc3339(self.deadline)
-                                    )),
-                                })
-                            }
-                        },
-                    });
-                    *self.as_mut().project().state = RespState::PollReady;
-                }
-                RespState::PollReady => {
-                    let ready = ready!(self.as_mut().project().response_tx.poll_ready(cx));
-                    if ready.is_err() {
-                        return Poll::Ready(());
-                    }
-                    let resp = (self.ctx, self.as_mut().project().response.take().unwrap());
-                    if self
-                        .as_mut()
-                        .project()
-                        .response_tx
-                        .start_send(resp)
-                        .is_err()
-                    {
-                        return Poll::Ready(());
-                    }
-                    *self.as_mut().project().state = RespState::PollFlush;
-                }
-                RespState::PollFlush => {
-                    let ready = ready!(self.as_mut().project().response_tx.poll_flush(cx));
-                    if ready.is_err() {
-                        return Poll::Ready(());
-                    }
-                    return Poll::Ready(());
-                }
-            }
-        }
+        Abortable::new(
+            async move {
+                let Request {
+                    mut context,
+                    message,
+                    id: request_id,
+                } = request;
+                let result = tokio::time::timeout(timeout, async {
+                    serve.serve(&mut context, message).await
+                })
+                .await;
+                let response = Response {
+                    context,
+                    request_id,
+                    message: match result {
+                        Ok(message) => Ok(message),
+                        Err(tokio::time::Elapsed { .. }) => {
+                            debug!(
+                                "[{}] Response did not complete before deadline of {}s.",
+                                trace_id,
+                                format_rfc3339(deadline)
+                            );
+                            // No point in responding, since the client will have dropped the
+                            // request.
+                            Err(ServerError {
+                                kind: io::ErrorKind::TimedOut,
+                                detail: Some(format!(
+                                    "Response did not complete before deadline of {}s.",
+                                    format_rfc3339(deadline)
+                                )),
+                            })
+                        }
+                    },
+                };
+                let _ = response_tx.send(response).await;
+            },
+            abort_registration,
+        )
+        .unwrap_or_else(|_| {})
     }
 }
 
@@ -619,7 +547,7 @@ where
     C: Channel,
     S: Serve<C::Req, Resp = C::Resp>,
 {
-    type Item = io::Result<RequestHandler<S::Fut, C::Resp>>;
+    type Item = io::Result<ResponseHandler<C::Req, C::Resp, S>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
@@ -653,15 +581,14 @@ where
     C::Req: Send + 'static,
     C::Resp: Send + 'static,
     S: Serve<C::Req, Resp = C::Resp> + Send + 'static,
-    S::Fut: Send + 'static,
 {
     /// Runs the client handler until completion by [spawning](tokio::spawn) each
     /// request handler onto the default executor.
     #[cfg(feature = "tokio1")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
     pub fn execute(self) -> impl Future<Output = ()> {
-        self.try_for_each(|request_handler| async {
-            tokio::spawn(request_handler);
+        self.try_for_each(|resp| async {
+            tokio::spawn(resp.execute());
             Ok(())
         })
         .map_ok(|()| log::info!("ClientHandler finished."))
@@ -689,7 +616,6 @@ where
     C::Req: Send + 'static,
     C::Resp: Send + 'static,
     Se: Serve<C::Req, Resp = C::Resp> + Send + 'static + Clone,
-    Se::Fut: Send + 'static,
 {
     type Output = ();
 
