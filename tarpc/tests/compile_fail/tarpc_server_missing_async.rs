@@ -1,7 +1,7 @@
 #![allow(incomplete_features)]
 #![feature(generic_associated_types)]
 
-#[tarpc::service]
+#[tarpc::service(derive_serde = false)]
 trait World {
     async fn hello(name: String) -> String;
 }

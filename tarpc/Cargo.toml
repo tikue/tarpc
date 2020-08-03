@@ -59,6 +59,10 @@ trybuild = "1.0"
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[[test]]
+name = "service_functional"
+required-features = ["full"]
+
 [[example]]
 name = "server_calling_server"
 required-features = ["full"]
@@ -69,4 +73,8 @@ required-features = ["full"]
 
 [[example]]
 name = "pubsub"
+required-features = ["full"]
+
+[[example]]
+name = "compression"
 required-features = ["full"]
