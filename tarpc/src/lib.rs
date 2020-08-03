@@ -71,6 +71,8 @@
 //! First, let's set up the dependencies and service definition.
 //!
 //! ```rust
+//! # #![allow(incomplete_features)]
+//! # #![feature(generic_associated_types)]
 //! # extern crate futures;
 //!
 //! use futures::{
@@ -96,6 +98,8 @@
 //! implement it for our Server struct.
 //!
 //! ```rust
+//! # #![allow(incomplete_features)]
+//! # #![feature(generic_associated_types)]
 //! # extern crate futures;
 //! # use futures::{
 //! #     future::{self, Ready},
@@ -118,14 +122,10 @@
 //! #[derive(Clone)]
 //! struct HelloServer;
 //!
+//! #[tarpc::server]
 //! impl World for HelloServer {
-//!     // Each defined rpc generates two items in the trait, a fn that serves the RPC, and
-//!     // an associated type representing the future output by the fn.
-//!
-//!     type HelloFut = Ready<String>;
-//!
-//!     fn hello(self, _: context::Context, name: String) -> Self::HelloFut {
-//!         future::ready(format!("Hello, {}!", name))
+//!     async fn hello(self, _: &mut context::Context, name: String) -> String {
+//!         format!("Hello, {}!", name)
 //!     }
 //! }
 //! ```
@@ -136,6 +136,8 @@
 //! available behind the `tcp` feature.
 //!
 //! ```rust
+//! # #![allow(incomplete_features)]
+//! # #![feature(generic_associated_types)]
 //! # extern crate futures;
 //! # use futures::{
 //! #     future::{self, Ready},
@@ -157,12 +159,10 @@
 //! # // and is used to start the server.
 //! # #[derive(Clone)]
 //! # struct HelloServer;
+//! # #[tarpc::server]
 //! # impl World for HelloServer {
-//! #     // Each defined rpc generates two items in the trait, a fn that serves the RPC, and
-//! #     // an associated type representing the future output by the fn.
-//! #     type HelloFut = Ready<String>;
-//! #     fn hello(self, _: context::Context, name: String) -> Self::HelloFut {
-//! #         future::ready(format!("Hello, {}!", name))
+//! #     async fn hello(self, _: &mut context::Context, name: String) -> String {
+//! #         format!("Hello, {}!", name)
 //! #     }
 //! # }
 //! #[tokio::main]
@@ -214,11 +214,13 @@ pub mod trace;
 ///
 /// Rpc methods are specified, mirroring trait syntax:
 ///
-/// ```
+/// ```rust
+/// # #![allow(incomplete_features)]
+/// # #![feature(generic_associated_types)]
 /// #[tarpc::service]
 /// trait Service {
-/// /// Say hello
-/// async fn hello(name: String) -> String;
+///     /// Say hello
+///     async fn hello(name: String) -> String;
 /// }
 /// ```
 ///
@@ -241,6 +243,8 @@ pub use tarpc_plugins::service;
 /// compile because async functions are disallowed in trait implementations:
 ///
 /// ```rust
+/// # #![allow(incomplete_features)]
+/// # #![feature(generic_associated_types)]
 /// # use tarpc::context;
 /// # use std::net::SocketAddr;
 /// #[tarpc::service]
@@ -253,7 +257,7 @@ pub use tarpc_plugins::service;
 ///
 /// #[tarpc::server]
 /// impl World for HelloServer {
-///     async fn hello(self, _: context::Context, name: String) -> String {
+///     async fn hello(self, _: &mut context::Context, name: String) -> String {
 ///         format!("Hello, {}! You are connected from {:?}.", name, self.0)
 ///     }
 /// }
@@ -262,6 +266,8 @@ pub use tarpc_plugins::service;
 /// Into code like this, which matches the service trait definition:
 ///
 /// ```rust
+/// # #![allow(incomplete_features)]
+/// # #![feature(generic_associated_types)]
 /// # use tarpc::context;
 /// # use std::pin::Pin;
 /// # use futures::Future;
@@ -275,10 +281,9 @@ pub use tarpc_plugins::service;
 /// }
 ///
 /// impl World for HelloServer {
-///     type HelloFut = Pin<Box<dyn Future<Output = String> + Send>>;
+///     type HelloFut<'a> = Pin<Box<dyn Future<Output = String> + Send + 'a>>;
 ///
-///     fn hello(self, _: context::Context, name: String) -> Pin<Box<dyn Future<Output = String>
-///     + Send>> {
+///     fn hello<'a>(self, _: &'a mut context::Context, name: String) -> Self::HelloFut<'a> {
 ///         Box::pin(async move {
 ///             format!("Hello, {}! You are connected from {:?}.", name, self.0)
 ///         })
