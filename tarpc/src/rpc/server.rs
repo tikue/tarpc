@@ -104,7 +104,7 @@ pub trait Serve<Req>: Sized + Clone {
     type Resp;
 
     /// Type of response future.
-    type Fut<'a>: Future<Output = Self::Resp> + Send;
+    type Fut<'a>: Future<Output = Self::Resp> + Send where Self: 'a;
 
     /// Responds to a single request.
     fn serve<'a>(self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a>;
