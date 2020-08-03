@@ -20,6 +20,7 @@ pub trait Client<Req> {
     type Response;
 
     /// The future response.
+    #[rustfmt::skip]
     type Future<'a>: Future<Output = io::Result<Self::Response>> where Self: 'a;
 
     /// Initiates a request, sending it to the dispatch task.
@@ -62,6 +63,7 @@ where
     F: FnMut(Resp) -> Resp2,
 {
     type Response = Resp2;
+    #[rustfmt::skip]
     type Future<'a> where Self: 'a = futures::future::MapOk<<C as Client<Req>>::Future<'a>, &'a mut F>;
 
     fn call<'a>(&'a mut self, ctx: context::Context, request: Req) -> Self::Future<'a> {
@@ -91,6 +93,7 @@ where
 
 impl<Req, Resp> Client<Req> for Channel<Req, Resp> {
     type Response = Resp;
+    #[rustfmt::skip]
     type Future<'a> where Self: 'a = channel::Call<'a, Req, Resp>;
 
     fn call<'a>(&'a mut self, ctx: context::Context, request: Req) -> channel::Call<'a, Req, Resp> {
