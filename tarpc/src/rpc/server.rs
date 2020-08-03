@@ -104,6 +104,7 @@ pub trait Serve<Req>: Sized + Clone {
     type Resp;
 
     /// Type of response future.
+    #[rustfmt::skip]
     type Fut<'a>: Future<Output = Self::Resp> + Send where Self: 'a;
 
     /// Responds to a single request.
