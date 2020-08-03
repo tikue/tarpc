@@ -468,7 +468,7 @@ impl<'a> ServiceGenerator<'a> {
                     let ty_doc = format!("The response future returned by {}.", ident);
                     quote! {
                         #[doc = #ty_doc]
-                        type #future_type<'a>: std::future::Future<Output = #output> + Send + 'a;
+                        type #future_type<'a>: std::future::Future<Output = #output> + Send where Self: 'a;
 
                         #( #attrs )*
                         fn #ident<'a>(self, context: &'a mut tarpc::context::Context, #( #args ),*) -> Self::#future_type<'a>;
@@ -675,7 +675,7 @@ impl<'a> ServiceGenerator<'a> {
 
         quote! {
             impl<C> From<C> for #client_ident<C>
-                where for <'a> C: tarpc::Client<'a, #request_ident, Response = #response_ident>
+                where C: tarpc::Client<#request_ident, Response = #response_ident>
             {
                 fn from(client: C) -> Self {
                     #client_ident(client)
@@ -732,7 +732,7 @@ impl<'a> ServiceGenerator<'a> {
 
         quote! {
             impl<C> #client_ident<C>
-                where for<'a> C: tarpc::Client<'a, #request_ident, Response = #response_ident>
+                where C: tarpc::Client<#request_ident, Response = #response_ident>
             {
                 #(
                     #[allow(unused)]
