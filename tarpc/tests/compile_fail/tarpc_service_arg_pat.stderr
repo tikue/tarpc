@@ -1,5 +1,5 @@
 error: patterns aren't allowed in RPC args
- --> $DIR/tarpc_service_arg_pat.rs:3:18
+ --> $DIR/tarpc_service_arg_pat.rs:6:18
   |
-3 |     async fn pat((a, b): (u8, u32));
+6 |     async fn pat((a, b): (u8, u32));
   |                  ^^^^^^

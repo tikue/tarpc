@@ -1,19 +1,23 @@
 error: not all trait items implemented, missing: `HelloFut`
- --> $DIR/tarpc_server_missing_async.rs:9:1
-  |
-9 | impl World for HelloServer {
-  | ^^^^
+  --> $DIR/tarpc_server_missing_async.rs:12:1
+   |
+12 | / impl World for HelloServer {
+13 | |     fn hello(name: String) ->  String {
+14 | |         format!("Hello, {}!", name)
+15 | |     }
+16 | | }
+   | |_^
 
 error: hint: `#[tarpc::server]` only rewrites async fns, and `fn hello` is not async
-  --> $DIR/tarpc_server_missing_async.rs:10:5
+  --> $DIR/tarpc_server_missing_async.rs:13:5
    |
-10 |     fn hello(name: String) ->  String {
-   |     ^^
+13 |     fn hello(name: String) ->  String {
+   |     ^^^^^^^^
 
 error[E0433]: failed to resolve: use of undeclared type or module `serde`
- --> $DIR/tarpc_server_missing_async.rs:1:1
+ --> $DIR/tarpc_server_missing_async.rs:4:1
   |
-1 | #[tarpc::service]
+4 | #[tarpc::service]
   | ^^^^^^^^^^^^^^^^^ use of undeclared type or module `serde`
   |
   = note: this error originates in an attribute macro (in Nightly builds, run with -Z macro-backtrace for more info)
