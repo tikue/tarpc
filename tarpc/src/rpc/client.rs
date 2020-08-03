@@ -48,6 +48,17 @@ pub trait Client<Req> {
     {
         WithRequest { inner: self, f }
     }
+
+    /// Returns a Client that applies a pre-processing function to the request
+    /// [`context`](context::Context). This can be used to enable context extensions,
+    /// which may be used by the transport.
+    fn with_context<F>(self, f: F) -> WithContext<Self, F>
+    where
+        F: FnMut(&mut context::Context),
+        Self: Sized,
+    {
+        WithContext { inner: self, f }
+    }
 }
 
 /// A Client that applies a function to the returned response.
@@ -88,6 +99,27 @@ where
 
     fn call<'a>(&'a mut self, ctx: context::Context, request: Req2) -> Self::Future<'a> {
         self.inner.call(ctx, (self.f)(request))
+    }
+}
+
+/// A Client that applies a pre-processing function to the request [`Context`](context::Context).
+#[derive(Clone, Debug)]
+pub struct WithContext<C, F> {
+    inner: C,
+    f: F,
+}
+
+impl<C, F, Req, Resp> Client<Req> for WithContext<C, F>
+where
+    C: Client<Req, Response = Resp>,
+    F: FnMut(&mut context::Context),
+{
+    type Response = Resp;
+    type Future<'a> = <C as Client<Req>>::Future<'a>;
+
+    fn call<'a>(&'a mut self, mut ctx: context::Context, request: Req) -> Self::Future<'a> {
+        (self.f)(&mut ctx);
+        self.inner.call(ctx, request)
     }
 }
 

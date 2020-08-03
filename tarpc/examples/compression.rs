@@ -7,9 +7,9 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::{io, io::Read, io::Write};
-use tarpc::rpc::context::HasContext;
 use tarpc::{
-    client, context,
+    client::{self, Client},
+    context::{self, HasContext},
     serde_transport::tcp,
     server::{BaseChannel, Channel},
 };
@@ -162,27 +162,16 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let transport = tcp::connect(addr, Bincode::default()).await?;
-    let mut client =
-        WorldClient::new(client::Config::default(), add_compression(transport)).spawn()?;
+    let channel = client::new(client::Config::default(), add_compression(transport)).spawn()?;
+    let mut client = WorldClient::from(channel.with_context(|ctx| {
+        ctx.extensions.insert(CompressionAlgorithm::Deflate);
+    }));
 
     println!(
         "{}",
         client
             .hello(
                 context::current(),
-                "heeeeeeeeeeeeeelllllllloooooooooooooooooooooooooooo".into()
-            )
-            .await?
-    );
-
-    let mut context = context::current();
-    context.extensions.insert(CompressionAlgorithm::Deflate);
-
-    println!(
-        "{}",
-        client
-            .hello(
-                context,
                 "heeeeeeeeeeeeeelllllllloooooooooooooooooooooooooooo".into()
             )
             .await?
