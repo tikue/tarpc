@@ -29,12 +29,12 @@ pub trait Client<Req> {
     /// once the request is successfully enqueued.
     ///
     /// [`Future`]: futures::Future
-    fn call(&mut self, ctx: context::Context, request: Req) -> Self::Future<'_>;
+    fn call(&self, ctx: context::Context, request: Req) -> Self::Future<'_>;
 
     /// Returns a Client that applies a post-processing function to the returned response.
     fn map_response<F, R>(self, f: F) -> MapResponse<Self, F>
     where
-        F: FnMut(Self::Response) -> R,
+        F: Fn(Self::Response) -> R,
         Self: Sized,
     {
         MapResponse { inner: self, f }
@@ -43,7 +43,7 @@ pub trait Client<Req> {
     /// Returns a Client that applies a pre-processing function to the request.
     fn with_request<F, Req2>(self, f: F) -> WithRequest<Self, F>
     where
-        F: FnMut(Req2) -> Req,
+        F: Fn(Req2) -> Req,
         Self: Sized,
     {
         WithRequest { inner: self, f }
@@ -54,7 +54,7 @@ pub trait Client<Req> {
     /// which may be used by the transport.
     fn with_context<F>(self, f: F) -> WithContext<Self, F>
     where
-        F: FnMut(&mut context::Context),
+        F: Fn(&mut context::Context),
         Self: Sized,
     {
         WithContext { inner: self, f }
@@ -71,14 +71,14 @@ pub struct MapResponse<C, F> {
 impl<C, F, Req, Resp, Resp2> Client<Req> for MapResponse<C, F>
 where
     C: Client<Req, Response = Resp>,
-    F: FnMut(Resp) -> Resp2,
+    F: Fn(Resp) -> Resp2,
 {
     type Response = Resp2;
     #[rustfmt::skip]
-    type Future<'a> where Self: 'a = futures::future::MapOk<<C as Client<Req>>::Future<'a>, &'a mut F>;
+    type Future<'a> where Self: 'a = futures::future::MapOk<<C as Client<Req>>::Future<'a>, &'a F>;
 
-    fn call(&mut self, ctx: context::Context, request: Req) -> Self::Future<'_> {
-        self.inner.call(ctx, request).map_ok(&mut self.f)
+    fn call(&self, ctx: context::Context, request: Req) -> Self::Future<'_> {
+        self.inner.call(ctx, request).map_ok(&self.f)
     }
 }
 
@@ -92,12 +92,12 @@ pub struct WithRequest<C, F> {
 impl<C, F, Req, Req2, Resp> Client<Req2> for WithRequest<C, F>
 where
     C: Client<Req, Response = Resp>,
-    F: FnMut(Req2) -> Req,
+    F: Fn(Req2) -> Req,
 {
     type Response = Resp;
     type Future<'a> = <C as Client<Req>>::Future<'a>;
 
-    fn call(&mut self, ctx: context::Context, request: Req2) -> Self::Future<'_> {
+    fn call(&self, ctx: context::Context, request: Req2) -> Self::Future<'_> {
         self.inner.call(ctx, (self.f)(request))
     }
 }
@@ -112,12 +112,12 @@ pub struct WithContext<C, F> {
 impl<C, F, Req, Resp> Client<Req> for WithContext<C, F>
 where
     C: Client<Req, Response = Resp>,
-    F: FnMut(&mut context::Context),
+    F: Fn(&mut context::Context),
 {
     type Response = Resp;
     type Future<'a> = <C as Client<Req>>::Future<'a>;
 
-    fn call(&mut self, mut ctx: context::Context, request: Req) -> Self::Future<'_> {
+    fn call(&self, mut ctx: context::Context, request: Req) -> Self::Future<'_> {
         (self.f)(&mut ctx);
         self.inner.call(ctx, request)
     }
@@ -128,7 +128,7 @@ impl<Req, Resp> Client<Req> for Channel<Req, Resp> {
     #[rustfmt::skip]
     type Future<'a> where Self: 'a = impl Future<Output = io::Result<Self::Response>>;
 
-    fn call(&mut self, ctx: context::Context, request: Req) -> Self::Future<'_> {
+    fn call(&self, ctx: context::Context, request: Req) -> Self::Future<'_> {
         self.call(ctx, request)
     }
 }
