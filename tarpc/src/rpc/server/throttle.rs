@@ -6,10 +6,14 @@
 
 use super::{Channel, Config};
 use crate::{Response, ServerError};
-use futures::{future::AbortRegistration, prelude::*, ready, task::*};
+use futures::{future::AbortRegistration, prelude::*, ready};
 use log::debug;
 use pin_project::pin_project;
-use std::{io, pin::Pin};
+use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 /// A [`Channel`] that limits the number of concurrent
 /// requests by throttling.
@@ -168,13 +172,12 @@ where
 }
 
 #[cfg(test)]
-use super::testing::{self, FakeChannel, PollExt};
-#[cfg(test)]
-use crate::Request;
-#[cfg(test)]
-use pin_utils::pin_mut;
-#[cfg(test)]
-use std::marker::PhantomData;
+use {
+    super::testing::{self, FakeChannel, PollExt},
+    crate::Request,
+    pin_utils::pin_mut,
+    std::marker::PhantomData,
+};
 
 #[test]
 fn throttler_in_flight_requests() {

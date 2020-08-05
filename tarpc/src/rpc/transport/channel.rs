@@ -7,10 +7,13 @@
 //! Transports backed by in-memory channels.
 
 use crate::PollIo;
-use futures::{channel::mpsc, task::*, Sink, Stream};
+use futures::{channel::mpsc, prelude::*};
 use pin_project::pin_project;
-use std::io;
-use std::pin::Pin;
+use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 /// Returns two unbounded channel peers. Each [`Stream`] yields items sent through the other's
 /// [`Sink`].

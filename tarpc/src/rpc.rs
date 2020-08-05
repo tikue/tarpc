@@ -33,8 +33,7 @@ pub(crate) mod util;
 pub use crate::{client::Client, server::Server, trace, transport::sealed::Transport};
 
 use anyhow::Context as _;
-use futures::task::*;
-use std::{fmt::Display, io, time::SystemTime};
+use std::{fmt::Display, io, task::Poll, time::SystemTime};
 
 /// A message from a client to a server.
 #[derive(Debug)]
