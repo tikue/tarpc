@@ -9,14 +9,17 @@ use crate::{context, Request, Response};
 use fnv::FnvHashSet;
 use futures::{
     future::{AbortHandle, AbortRegistration},
-    task::*,
+    task::noop_waker_ref,
     Sink, Stream,
 };
 use pin_project::pin_project;
-use std::collections::VecDeque;
-use std::io;
-use std::pin::Pin;
-use std::time::SystemTime;
+use std::{
+    collections::VecDeque,
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+    time::SystemTime,
+};
 
 #[pin_project]
 pub(crate) struct FakeChannel<In, Out> {

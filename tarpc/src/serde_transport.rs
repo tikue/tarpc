@@ -8,9 +8,10 @@
 
 #![deny(missing_docs)]
 
-use futures::{prelude::*, task::*};
+use futures::prelude::*;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
+use std::task::{Context, Poll};
 use std::{error::Error, io, pin::Pin};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_serde::{Framed as SerdeFramed, *};
@@ -220,8 +221,9 @@ pub mod tcp {
 mod tests {
     use super::Transport;
     use assert_matches::assert_matches;
-    use futures::{task::*, Sink, Stream};
+    use futures::{prelude::*, task::noop_waker_ref};
     use pin_utils::pin_mut;
+    use std::task::{Context, Poll};
     use std::{
         io::{self, Cursor},
         pin::Pin,

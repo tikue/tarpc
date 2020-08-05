@@ -207,14 +207,13 @@
 #![allow(clippy::type_complexity, incomplete_features)]
 #![feature(generic_associated_types)]
 
-pub mod rpc;
-pub use rpc::*;
+mod rpc;
 
 #[cfg(feature = "serde-transport")]
 #[cfg_attr(docsrs, doc(cfg(feature = "serde-transport")))]
 pub mod serde_transport;
-
 pub mod trace;
+pub use rpc::*;
 
 /// The main macro that creates RPC services.
 ///

@@ -9,10 +9,11 @@ use crate::{
     util::Compact,
 };
 use fnv::FnvHashMap;
-use futures::{channel::mpsc, future::AbortRegistration, prelude::*, ready, stream::Fuse, task::*};
+use futures::{channel::mpsc, future::AbortRegistration, prelude::*, ready, stream::Fuse};
 use log::{debug, info, trace};
 use pin_project::pin_project;
 use std::sync::{Arc, Weak};
+use std::task::{Context, Poll};
 use std::{
     collections::hash_map::Entry, convert::TryInto, fmt, hash::Hash, marker::Unpin, pin::Pin,
 };
@@ -271,9 +272,7 @@ where
 
 #[cfg(test)]
 fn ctx() -> Context<'static> {
-    use futures::task::*;
-
-    Context::from_waker(&noop_waker_ref())
+    Context::from_waker(&futures::task::noop_waker_ref())
 }
 
 #[test]

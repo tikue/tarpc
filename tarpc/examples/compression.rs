@@ -2,7 +2,7 @@
 #![feature(generic_associated_types)]
 
 use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
-use futures::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
+use futures::prelude::*;
 use log::info;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;

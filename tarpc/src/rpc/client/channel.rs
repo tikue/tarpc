@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+use super::{Config, NewClient};
 use crate::{
     context,
     trace::SpanId,
@@ -16,7 +17,6 @@ use futures::{
     prelude::*,
     ready,
     stream::Fuse,
-    task::*,
 };
 use log::{debug, info, trace};
 use pin_project::{pin_project, pinned_drop};
@@ -27,9 +27,8 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    task::{Context, Poll},
 };
-
-use super::{Config, NewClient};
 
 /// Handles communication from the client to request dispatch.
 #[derive(Debug)]
@@ -718,9 +717,14 @@ mod tests {
     use futures::{
         channel::{mpsc, oneshot},
         prelude::*,
-        task::*,
+        task::noop_waker_ref,
     };
-    use std::{pin::Pin, sync::atomic::AtomicU64, sync::Arc};
+    use std::{
+        pin::Pin,
+        sync::atomic::AtomicU64,
+        sync::Arc,
+        task::{Context, Poll},
+    };
 
     #[tokio::test(threaded_scheduler)]
     async fn dispatch_response_cancels_on_drop() {

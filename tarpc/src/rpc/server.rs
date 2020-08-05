@@ -17,12 +17,18 @@ use futures::{
     prelude::*,
     ready,
     stream::Fuse,
-    task::*,
 };
 use humantime::format_rfc3339;
 use log::{debug, trace};
 use pin_project::pin_project;
-use std::{fmt, hash::Hash, io, marker::PhantomData, pin::Pin};
+use std::{
+    fmt,
+    hash::Hash,
+    io,
+    marker::PhantomData,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 mod filter;
 #[cfg(test)]
