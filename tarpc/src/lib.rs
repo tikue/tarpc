@@ -205,7 +205,7 @@
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(clippy::type_complexity, incomplete_features)]
-#![feature(generic_associated_types)]
+#![feature(generic_associated_types, type_alias_impl_trait)]
 
 mod rpc;
 

@@ -50,55 +50,14 @@ impl<Req, Resp> Clone for Channel<Req, Resp> {
     }
 }
 
-/// A future returned by [`Channel::send`] that resolves to a server response.
-#[pin_project]
-#[derive(Debug)]
-#[must_use = "futures do nothing unless polled"]
-struct Send<'a, Req, Resp> {
-    #[pin]
-    fut: MapOkDispatchResponse<SendMapErrConnectionReset<'a, Req, Resp>, Resp>,
-}
-
-type SendMapErrConnectionReset<'a, Req, Resp> = MapErrConnectionReset<
-    futures::sink::Send<'a, mpsc::Sender<DispatchRequest<Req, Resp>>, DispatchRequest<Req, Resp>>,
->;
-
-impl<'a, Req, Resp> Future for Send<'a, Req, Resp> {
-    type Output = io::Result<DispatchResponse<Resp>>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.as_mut().project().fut.poll(cx)
-    }
-}
-
-/// A future returned by [`Channel::call`] that resolves to a server response.
-#[pin_project]
-#[derive(Debug)]
-#[must_use = "futures do nothing unless polled"]
-pub struct Call<'a, Req, Resp> {
-    #[pin]
-    fut: tokio::time::Timeout<AndThenIdent<Send<'a, Req, Resp>, DispatchResponse<Resp>>>,
-}
-
-impl<'a, Req, Resp> Future for Call<'a, Req, Resp> {
-    type Output = io::Result<Resp>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let resp = ready!(self.as_mut().project().fut.poll(cx));
-        Poll::Ready(match resp {
-            Ok(resp) => resp,
-            Err(tokio::time::Elapsed { .. }) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Client dropped expired request.".to_string(),
-            )),
-        })
-    }
-}
-
 impl<Req, Resp> Channel<Req, Resp> {
     /// Sends a request to the dispatch task to forward to the server, returning a [`Future`] that
     /// resolves when the request is sent (not when the response is received).
-    fn send(&mut self, mut ctx: context::Context, request: Req) -> Send<Req, Resp> {
+    async fn send(
+        &mut self,
+        mut ctx: context::Context,
+        request: Req,
+    ) -> io::Result<DispatchResponse<Resp>> {
         // Convert the context to the call context.
         ctx.trace_context.parent_id = Some(ctx.trace_context.span_id);
         ctx.trace_context.span_id = SpanId::random(&mut rand::thread_rng());
@@ -106,27 +65,27 @@ impl<Req, Resp> Channel<Req, Resp> {
         let (response_completion, response) = oneshot::channel();
         let cancellation = self.cancellation.clone();
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-        Send {
-            fut: MapOkDispatchResponse::new(
-                MapErrConnectionReset::new(self.to_dispatch.send(DispatchRequest {
-                    ctx,
-                    request_id,
-                    request,
-                    response_completion,
-                })),
-                DispatchResponse {
-                    response,
-                    complete: false,
-                    request_id,
-                    cancellation,
-                },
-            ),
-        }
+        self.to_dispatch
+            .send(DispatchRequest {
+                ctx,
+                request_id,
+                request,
+                response_completion,
+            })
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::ConnectionReset))?;
+
+        Ok(DispatchResponse {
+            response,
+            complete: false,
+            request_id,
+            cancellation,
+        })
     }
 
     /// Sends a request to the dispatch task to forward to the server, returning a [`Future`] that
     /// resolves to the response.
-    pub fn call(&mut self, ctx: context::Context, request: Req) -> Call<Req, Resp> {
+    pub async fn call(&mut self, ctx: context::Context, request: Req) -> io::Result<Resp> {
         let timeout = ctx.deadline.time_until();
         trace!(
             "[{}] Queuing request with timeout {:?}.",
@@ -134,8 +93,13 @@ impl<Req, Resp> Channel<Req, Resp> {
             timeout,
         );
 
-        Call {
-            fut: tokio::time::timeout(timeout, AndThenIdent::new(self.send(ctx, request))),
+        let response = async { self.send(ctx, request).await?.await };
+        match tokio::time::timeout(timeout, response).await {
+            Ok(resp) => resp,
+            Err(tokio::time::Elapsed { .. }) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Client dropped expired request.".to_string(),
+            )),
         }
     }
 }
@@ -521,183 +485,6 @@ impl Stream for CanceledRequests {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<u64>> {
         self.0.poll_next_unpin(cx)
-    }
-}
-
-#[pin_project]
-#[derive(Debug)]
-#[must_use = "futures do nothing unless polled"]
-struct MapErrConnectionReset<Fut> {
-    #[pin]
-    future: Fut,
-    finished: Option<()>,
-}
-
-impl<Fut> MapErrConnectionReset<Fut> {
-    fn new(future: Fut) -> MapErrConnectionReset<Fut> {
-        MapErrConnectionReset {
-            future,
-            finished: Some(()),
-        }
-    }
-}
-
-impl<Fut> Future for MapErrConnectionReset<Fut>
-where
-    Fut: TryFuture,
-{
-    type Output = io::Result<Fut::Ok>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.as_mut().project().future.try_poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(result) => {
-                self.project().finished.take().expect(
-                    "MapErrConnectionReset must not be polled after it returned `Poll::Ready`",
-                );
-                Poll::Ready(result.map_err(|_| io::Error::from(io::ErrorKind::ConnectionReset)))
-            }
-        }
-    }
-}
-
-#[pin_project]
-#[derive(Debug)]
-#[must_use = "futures do nothing unless polled"]
-struct MapOkDispatchResponse<Fut, Resp> {
-    #[pin]
-    future: Fut,
-    response: Option<DispatchResponse<Resp>>,
-}
-
-impl<Fut, Resp> MapOkDispatchResponse<Fut, Resp> {
-    fn new(future: Fut, response: DispatchResponse<Resp>) -> MapOkDispatchResponse<Fut, Resp> {
-        MapOkDispatchResponse {
-            future,
-            response: Some(response),
-        }
-    }
-}
-
-impl<Fut, Resp> Future for MapOkDispatchResponse<Fut, Resp>
-where
-    Fut: TryFuture,
-{
-    type Output = Result<DispatchResponse<Resp>, Fut::Error>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.as_mut().project().future.try_poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(result) => {
-                let response = self
-                    .as_mut()
-                    .project()
-                    .response
-                    .take()
-                    .expect("MapOk must not be polled after it returned `Poll::Ready`");
-                Poll::Ready(result.map(|_| response))
-            }
-        }
-    }
-}
-
-#[pin_project]
-#[derive(Debug)]
-#[must_use = "futures do nothing unless polled"]
-struct AndThenIdent<Fut1, Fut2> {
-    #[pin]
-    try_chain: TryChain<Fut1, Fut2>,
-}
-
-impl<Fut1, Fut2> AndThenIdent<Fut1, Fut2>
-where
-    Fut1: TryFuture<Ok = Fut2>,
-    Fut2: TryFuture,
-{
-    /// Creates a new `Then`.
-    fn new(future: Fut1) -> AndThenIdent<Fut1, Fut2> {
-        AndThenIdent {
-            try_chain: TryChain::new(future),
-        }
-    }
-}
-
-impl<Fut1, Fut2> Future for AndThenIdent<Fut1, Fut2>
-where
-    Fut1: TryFuture<Ok = Fut2>,
-    Fut2: TryFuture<Error = Fut1::Error>,
-{
-    type Output = Result<Fut2::Ok, Fut2::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.project().try_chain.poll(cx, |result| match result {
-            Ok(ok) => TryChainAction::Future(ok),
-            Err(err) => TryChainAction::Output(Err(err)),
-        })
-    }
-}
-
-#[pin_project(project = TryChainProj)]
-#[must_use = "futures do nothing unless polled"]
-#[derive(Debug)]
-enum TryChain<Fut1, Fut2> {
-    First(#[pin] Fut1),
-    Second(#[pin] Fut2),
-    Empty,
-}
-
-enum TryChainAction<Fut2>
-where
-    Fut2: TryFuture,
-{
-    Future(Fut2),
-    Output(Result<Fut2::Ok, Fut2::Error>),
-}
-
-impl<Fut1, Fut2> TryChain<Fut1, Fut2>
-where
-    Fut1: TryFuture<Ok = Fut2>,
-    Fut2: TryFuture,
-{
-    fn new(fut1: Fut1) -> TryChain<Fut1, Fut2> {
-        TryChain::First(fut1)
-    }
-
-    fn poll<F>(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        f: F,
-    ) -> Poll<Result<Fut2::Ok, Fut2::Error>>
-    where
-        F: FnOnce(Result<Fut1::Ok, Fut1::Error>) -> TryChainAction<Fut2>,
-    {
-        let mut f = Some(f);
-
-        loop {
-            let output = match self.as_mut().project() {
-                TryChainProj::First(fut1) => {
-                    // Poll the first future
-                    match fut1.try_poll(cx) {
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(output) => output,
-                    }
-                }
-                TryChainProj::Second(fut2) => {
-                    // Poll the second future
-                    return fut2.try_poll(cx);
-                }
-                TryChainProj::Empty => {
-                    panic!("future must not be polled after it returned `Poll::Ready`");
-                }
-            };
-
-            self.set(TryChain::Empty); // Drop fut1
-            let f = f.take().unwrap();
-            match f(output) {
-                TryChainAction::Future(fut2) => self.set(TryChain::Second(fut2)),
-                TryChainAction::Output(output) => return Poll::Ready(output),
-            }
-        }
     }
 }
 

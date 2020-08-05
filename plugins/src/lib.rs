@@ -306,21 +306,9 @@ fn transform_method(method: &mut ImplItemMethod) -> ImplItemType {
     let fut_name_ident = Ident::new(&fut_name, method.sig.ident.span());
 
     // generate the updated return signature.
-    if method.sig.generics.params.is_empty() {
-        if let Some(arg) = method.sig.inputs.iter_mut().skip(1).next() {
-            if let FnArg::Typed(PatType { ty, .. }) = arg {
-                if let &mut Type::Reference(ref mut reference) = ty.as_mut() {
-                    if reference.lifetime.is_none() {
-                        method.sig.generics = parse_quote! { <'a> };
-                        reference.lifetime = parse_quote! { 'a };
-                    }
-                }
-            }
-        }
-    }
     method.sig.output = parse_quote! {
         -> ::core::pin::Pin<Box<
-                dyn ::core::future::Future<Output = #ret> + Send + 'a
+                dyn ::core::future::Future<Output = #ret> + Send + '_
             >>
     };
 
@@ -523,7 +511,7 @@ impl<'a> ServiceGenerator<'a> {
                 type Resp = #response_ident;
                 type Fut<'a> = #response_fut_ident<'a, S>;
 
-                fn serve<'a>(self, ctx: &'a mut tarpc::context::Context, req: #request_ident) -> Self::Fut<'a> {
+                fn serve(self, ctx: &mut tarpc::context::Context, req: #request_ident) -> Self::Fut<'_> {
                     match req {
                         #(
                             #request_ident::#camel_case_idents{ #( #arg_pats ),* } => {
