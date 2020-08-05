@@ -112,8 +112,7 @@ fn add_compression<In, Out>(
         + Sink<CompressedMessage<Out>, Error = io::Error>,
 ) -> impl Stream<Item = io::Result<In>> + Sink<Out, Error = io::Error>
 where
-    for<'a> In: Deserialize<'a>,
-    In: Serialize + HasContext,
+    for<'a> In: Deserialize<'a> + Serialize + HasContext,
     Out: Serialize + HasContext,
 {
     transport.with(compress).and_then(decompress)

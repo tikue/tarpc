@@ -245,16 +245,34 @@ impl<Req, Resp, C> RequestDispatch<Req, Resp, C>
 where
     C: Transport<ClientMessage<Req>, Response<Resp>>,
 {
+    fn transport<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut Fuse<C>> {
+        self.as_mut().project().transport
+    }
+
+    fn pending_requests<'a>(
+        self: &'a mut Pin<&mut Self>,
+    ) -> Pin<&'a mut Fuse<mpsc::Receiver<DispatchRequest<Req, Resp>>>> {
+        self.as_mut().project().pending_requests
+    }
+
+    fn canceled_requests<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut Fuse<CanceledRequests>> {
+        self.as_mut().project().canceled_requests
+    }
+
+    fn in_flight_requests<'a>(
+        self: &'a mut Pin<&mut Self>,
+    ) -> &'a mut FnvHashMap<u64, InFlightData<Resp>> {
+        self.as_mut().project().in_flight_requests
+    }
+
     fn pump_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> PollIo<()> {
-        Poll::Ready(
-            match ready!(self.as_mut().project().transport.poll_next(cx)?) {
-                Some(response) => {
-                    self.complete(response);
-                    Some(Ok(()))
-                }
-                None => None,
-            },
-        )
+        Poll::Ready(match ready!(self.transport().poll_next(cx)?) {
+            Some(response) => {
+                self.complete(response);
+                Some(Ok(()))
+            }
+            None => None,
+        })
     }
 
     fn pump_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> PollIo<()> {
@@ -283,12 +301,12 @@ where
 
         match (pending_requests_status, canceled_requests_status) {
             (ReceiverStatus::Closed, ReceiverStatus::Closed) => {
-                ready!(self.as_mut().project().transport.poll_flush(cx)?);
+                ready!(self.transport().poll_flush(cx)?);
                 Poll::Ready(None)
             }
             (ReceiverStatus::NotReady, _) | (_, ReceiverStatus::NotReady) => {
                 // No more messages to process, so flush any messages buffered in the transport.
-                ready!(self.as_mut().project().transport.poll_flush(cx)?);
+                ready!(self.transport().poll_flush(cx)?);
 
                 // Even if we fully-flush, we return Pending, because we have no more requests
                 // or cancellations right now.
@@ -302,10 +320,10 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> PollIo<DispatchRequest<Req, Resp>> {
-        if self.as_mut().project().in_flight_requests.len() >= self.config.max_in_flight_requests {
+        if self.in_flight_requests.len() >= self.config.max_in_flight_requests {
             info!(
                 "At in-flight request capacity ({}/{}).",
-                self.as_mut().project().in_flight_requests.len(),
+                self.in_flight_requests.len(),
                 self.config.max_in_flight_requests
             );
 
@@ -314,13 +332,13 @@ where
             return Poll::Pending;
         }
 
-        while let Poll::Pending = self.as_mut().project().transport.poll_ready(cx)? {
+        while let Poll::Pending = self.transport().poll_ready(cx)? {
             // We can't yield a request-to-be-sent before the transport is capable of buffering it.
-            ready!(self.as_mut().project().transport.poll_flush(cx)?);
+            ready!(self.transport().poll_flush(cx)?);
         }
 
         loop {
-            match ready!(self.as_mut().project().pending_requests.poll_next_unpin(cx)) {
+            match ready!(self.pending_requests().poll_next_unpin(cx)) {
                 Some(request) => {
                     if request.response_completion.is_canceled() {
                         trace!(
@@ -342,25 +360,16 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> PollIo<(context::Context, u64)> {
-        while let Poll::Pending = self.as_mut().project().transport.poll_ready(cx)? {
-            ready!(self.as_mut().project().transport.poll_flush(cx)?);
+        while let Poll::Pending = self.transport().poll_ready(cx)? {
+            ready!(self.transport().poll_flush(cx)?);
         }
 
         loop {
-            let cancellation = self
-                .as_mut()
-                .project()
-                .canceled_requests
-                .poll_next_unpin(cx);
+            let cancellation = self.canceled_requests().poll_next_unpin(cx);
             match ready!(cancellation) {
                 Some(request_id) => {
-                    if let Some(in_flight_data) = self
-                        .as_mut()
-                        .project()
-                        .in_flight_requests
-                        .remove(&request_id)
-                    {
-                        self.as_mut().project().in_flight_requests.compact(0.1);
+                    if let Some(in_flight_data) = self.in_flight_requests().remove(&request_id) {
+                        self.in_flight_requests().compact(0.1);
                         debug!("[{}] Removed request.", in_flight_data.ctx.trace_id());
                         return Poll::Ready(Some(Ok((in_flight_data.ctx, request_id))));
                     }
@@ -380,8 +389,8 @@ where
             message: dispatch_request.request,
             context: dispatch_request.ctx.clone(),
         });
-        self.as_mut().project().transport.start_send(request)?;
-        self.as_mut().project().in_flight_requests.insert(
+        self.transport().start_send(request)?;
+        self.in_flight_requests().insert(
             request_id,
             InFlightData {
                 ctx: dispatch_request.ctx,
@@ -401,20 +410,15 @@ where
             context,
             request_id,
         };
-        self.as_mut().project().transport.start_send(cancel)?;
+        self.transport().start_send(cancel)?;
         trace!("[{}] Cancel message sent.", trace_id);
         Ok(())
     }
 
     /// Sends a server response to the client task that initiated the associated request.
     fn complete(mut self: Pin<&mut Self>, response: Response<Resp>) -> bool {
-        if let Some(in_flight_data) = self
-            .as_mut()
-            .project()
-            .in_flight_requests
-            .remove(&response.request_id)
-        {
-            self.as_mut().project().in_flight_requests.compact(0.1);
+        if let Some(in_flight_data) = self.in_flight_requests().remove(&response.request_id) {
+            self.in_flight_requests().compact(0.1);
 
             trace!("[{}] Received response.", in_flight_data.ctx.trace_id());
             let _ = in_flight_data.response_completion.send(response);
@@ -452,13 +456,13 @@ where
                     return Poll::Ready(Ok(()));
                 }
                 (read, Poll::Ready(None)) => {
-                    if self.as_mut().project().in_flight_requests.is_empty() {
+                    if self.in_flight_requests.is_empty() {
                         info!("Shutdown: write half closed, and no requests in flight.");
                         return Poll::Ready(Ok(()));
                     }
                     info!(
                         "Shutdown: write half closed, and {} requests in flight.",
-                        self.as_mut().project().in_flight_requests.len()
+                        self.in_flight_requests.len()
                     );
                     match read {
                         Poll::Ready(Some(())) => continue,
@@ -795,7 +799,7 @@ mod tests {
         let req = send_request(&mut channel, "hi").await;
 
         assert!(dispatch.as_mut().pump_write(cx).ready().is_some());
-        assert!(!dispatch.as_mut().project().in_flight_requests.is_empty());
+        assert!(!dispatch.in_flight_requests.is_empty());
 
         // Test that a request future dropped after it's processed by dispatch will cause the request
         // to be removed from the in-flight request map.
@@ -805,7 +809,7 @@ mod tests {
         } else {
             panic!("Expected request to be cancelled")
         };
-        assert!(dispatch.project().in_flight_requests.is_empty());
+        assert!(dispatch.in_flight_requests.is_empty());
     }
 
     #[tokio::test(threaded_scheduler)]
