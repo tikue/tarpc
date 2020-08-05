@@ -11,13 +11,9 @@ use crate::{
     util::{Compact, TimeUntil},
     ClientMessage, PollContext, PollIo, Request, Response, Transport,
 };
+use async_channel::{Receiver, Sender};
 use fnv::FnvHashMap;
-use futures::{
-    channel::{mpsc, oneshot},
-    prelude::*,
-    ready,
-    stream::Fuse,
-};
+use futures::{prelude::*, ready, stream::Fuse, StreamExt};
 use log::{debug, info, trace};
 use pin_project::{pin_project, pinned_drop};
 use std::{
@@ -33,7 +29,7 @@ use std::{
 /// Handles communication from the client to request dispatch.
 #[derive(Debug)]
 pub struct Channel<Req, Resp> {
-    to_dispatch: mpsc::Sender<DispatchRequest<Req, Resp>>,
+    to_dispatch: Sender<DispatchRequest<Req, Resp>>,
     /// Channel to send a cancel message to the dispatcher.
     cancellation: RequestCancellation,
     /// The ID to use for the next request to stage.
@@ -54,7 +50,7 @@ impl<Req, Resp> Channel<Req, Resp> {
     /// Sends a request to the dispatch task to forward to the server, returning a [`Future`] that
     /// resolves when the request is sent (not when the response is received).
     async fn send(
-        &mut self,
+        &self,
         mut ctx: context::Context,
         request: Req,
     ) -> io::Result<DispatchResponse<Resp>> {
@@ -62,7 +58,7 @@ impl<Req, Resp> Channel<Req, Resp> {
         ctx.trace_context.parent_id = Some(ctx.trace_context.span_id);
         ctx.trace_context.span_id = SpanId::random(&mut rand::thread_rng());
 
-        let (response_completion, response) = oneshot::channel();
+        let (response_completion, response) = async_channel::bounded(1);
         let cancellation = self.cancellation.clone();
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         self.to_dispatch
@@ -85,7 +81,7 @@ impl<Req, Resp> Channel<Req, Resp> {
 
     /// Sends a request to the dispatch task to forward to the server, returning a [`Future`] that
     /// resolves to the response.
-    pub async fn call(&mut self, ctx: context::Context, request: Req) -> io::Result<Resp> {
+    pub async fn call(&self, ctx: context::Context, request: Req) -> io::Result<Resp> {
         let timeout = ctx.deadline.time_until();
         trace!(
             "[{}] Queuing request with timeout {:?}.",
@@ -109,7 +105,8 @@ impl<Req, Resp> Channel<Req, Resp> {
 #[pin_project(PinnedDrop)]
 #[derive(Debug)]
 struct DispatchResponse<Resp> {
-    response: oneshot::Receiver<Response<Resp>>,
+    /// A logical oneshot.
+    response: Receiver<Response<Resp>>,
     complete: bool,
     cancellation: RequestCancellation,
     request_id: u64,
@@ -119,12 +116,12 @@ impl<Resp> Future for DispatchResponse<Resp> {
     type Output = io::Result<Resp>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<Resp>> {
-        let resp = ready!(self.response.poll_unpin(cx));
+        let resp = ready!(self.response.poll_next_unpin(cx));
         self.complete = true;
         Poll::Ready(match resp {
-            Ok(resp) => Ok(resp.message?),
-            Err(oneshot::Canceled) => {
-                // The oneshot is Canceled when the dispatch task ends. In that case,
+            Some(resp) => Ok(resp.message?),
+            None => {
+                // The receiver is closed when the dispatch task ends. In that case,
                 // there's nothing listening on the other side, so there's no point in
                 // propagating cancellation.
                 Err(io::Error::from(io::ErrorKind::ConnectionReset))
@@ -164,7 +161,7 @@ pub fn new<Req, Resp, C>(
 where
     C: Transport<ClientMessage<Req>, Response<Resp>>,
 {
-    let (to_dispatch, pending_requests) = mpsc::channel(config.pending_request_buffer);
+    let (to_dispatch, pending_requests) = async_channel::bounded(config.pending_request_buffer);
     let (cancellation, canceled_requests) = cancellations();
     let canceled_requests = canceled_requests.fuse();
 
@@ -194,7 +191,7 @@ pub struct RequestDispatch<Req, Resp, C> {
     transport: Fuse<C>,
     /// Requests waiting to be written to the wire.
     #[pin]
-    pending_requests: Fuse<mpsc::Receiver<DispatchRequest<Req, Resp>>>,
+    pending_requests: Fuse<Receiver<DispatchRequest<Req, Resp>>>,
     /// Requests that were dropped.
     #[pin]
     canceled_requests: Fuse<CanceledRequests>,
@@ -214,7 +211,7 @@ where
 
     fn pending_requests<'a>(
         self: &'a mut Pin<&mut Self>,
-    ) -> Pin<&'a mut Fuse<mpsc::Receiver<DispatchRequest<Req, Resp>>>> {
+    ) -> Pin<&'a mut Fuse<Receiver<DispatchRequest<Req, Resp>>>> {
         self.as_mut().project().pending_requests
     }
 
@@ -303,7 +300,7 @@ where
         loop {
             match ready!(self.pending_requests().poll_next_unpin(cx)) {
                 Some(request) => {
-                    if request.response_completion.is_canceled() {
+                    if request.response_completion.is_closed() {
                         trace!(
                             "[{}] Request canceled before being sent.",
                             request.ctx.trace_id()
@@ -384,7 +381,14 @@ where
             self.in_flight_requests().compact(0.1);
 
             trace!("[{}] Received response.", in_flight_data.ctx.trace_id());
-            let _ = in_flight_data.response_completion.send(response);
+            if let Err(async_channel::TrySendError::Full(_)) =
+                in_flight_data.response_completion.try_send(response)
+            {
+                log::error!(
+                    "[{}] response completion was full, which should be impossible.",
+                    in_flight_data.ctx.trace_id()
+                );
+            }
             return true;
         }
 
@@ -446,37 +450,41 @@ struct DispatchRequest<Req, Resp> {
     ctx: context::Context,
     request_id: u64,
     request: Req,
-    response_completion: oneshot::Sender<Response<Resp>>,
+    response_completion: Sender<Response<Resp>>,
 }
 
 #[derive(Debug)]
 struct InFlightData<Resp> {
     ctx: context::Context,
-    response_completion: oneshot::Sender<Response<Resp>>,
+    /// The sender end of a logical oneshot.
+    response_completion: Sender<Response<Resp>>,
 }
 
 /// Sends request cancellation signals.
 #[derive(Debug, Clone)]
-struct RequestCancellation(mpsc::UnboundedSender<u64>);
+struct RequestCancellation(Sender<u64>);
 
 /// A stream of IDs of requests that have been canceled.
 #[derive(Debug)]
-struct CanceledRequests(mpsc::UnboundedReceiver<u64>);
+struct CanceledRequests(Receiver<u64>);
 
 /// Returns a channel to send request cancellation messages.
 fn cancellations() -> (RequestCancellation, CanceledRequests) {
     // Unbounded because messages are sent in the drop fn. This is fine, because it's still
-    // bounded by the number of in-flight requests. Additionally, each request has a clone
-    // of the sender, so the bounded channel would have the same behavior,
-    // since it guarantees a slot.
-    let (tx, rx) = mpsc::unbounded();
+    // bounded by the number of in-flight requests.
+    let (tx, rx) = async_channel::unbounded();
     (RequestCancellation(tx), CanceledRequests(rx))
 }
 
 impl RequestCancellation {
     /// Cancels the request with ID `request_id`.
     fn cancel(&mut self, request_id: u64) {
-        let _ = self.0.unbounded_send(request_id);
+        if let Err(async_channel::TrySendError::Full(_)) = self.0.try_send(request_id) {
+            log::error!(
+                "[Request {}] cancellation channel was full, which should be impossible.",
+                request_id
+            );
+        }
     }
 }
 
@@ -500,12 +508,9 @@ mod tests {
         transport::{self, channel::UnboundedChannel},
         ClientMessage, Response,
     };
+    use assert_matches::assert_matches;
     use fnv::FnvHashMap;
-    use futures::{
-        channel::{mpsc, oneshot},
-        prelude::*,
-        task::noop_waker_ref,
-    };
+    use futures::{prelude::*, task::noop_waker_ref};
     use std::{
         pin::Pin,
         sync::atomic::AtomicU64,
@@ -515,8 +520,8 @@ mod tests {
 
     #[tokio::test(threaded_scheduler)]
     async fn dispatch_response_cancels_on_drop() {
-        let (cancellation, mut canceled_requests) = cancellations();
-        let (_, response) = oneshot::channel();
+        let (cancellation, canceled_requests) = cancellations();
+        let (_, response) = async_channel::bounded(1);
         drop(DispatchResponse::<u32> {
             response,
             cancellation,
@@ -524,7 +529,7 @@ mod tests {
             request_id: 3,
         });
         // resp's drop() is run, which should send a cancel message.
-        assert_eq!(canceled_requests.0.try_next().unwrap(), Some(3));
+        assert_matches!(canceled_requests.0.try_recv(), Ok(3));
     }
 
     #[tokio::test(threaded_scheduler)]
@@ -612,7 +617,7 @@ mod tests {
         // Test that a request future that's closed its receiver but not yet canceled its request --
         // i.e. still in `drop fn` -- will cause the request to not be added to the in-flight request
         // map.
-        let mut resp = send_request(&mut channel, "hi").await;
+        let resp = send_request(&mut channel, "hi").await;
         resp.response.close();
 
         assert!(dispatch.poll_next_request(cx).is_pending());
@@ -625,8 +630,8 @@ mod tests {
     ) {
         let _ = env_logger::try_init();
 
-        let (to_dispatch, pending_requests) = mpsc::channel(1);
-        let (cancel_tx, canceled_requests) = mpsc::unbounded();
+        let (to_dispatch, pending_requests) = async_channel::bounded(1);
+        let (cancel_tx, canceled_requests) = async_channel::unbounded();
         let (client_channel, server_channel) = transport::channel::unbounded();
 
         let dispatch = RequestDispatch::<String, String, _> {

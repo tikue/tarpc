@@ -27,6 +27,7 @@ travis-ci = { repository = "google/tarpc" }
 
 [dependencies]
 anyhow = "1.0"
+async-channel = "1.0"
 fnv = "1.0"
 futures = "0.3"
 humantime = "1.0"
