@@ -197,23 +197,23 @@ where
     }
 
     /// Returns the inner transport over which messages are sent and received.
-    pub fn get_pin_ref(self: Pin<&mut Self>) -> Pin<&mut T> {
-        self.project().transport.get_pin_mut()
+    pub fn get_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut T> {
+        self.as_mut().project().transport.get_pin_mut()
+    }
+
+    /// Returns a mutable reference to the map of in-flight requests.
+    fn requests_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> &'a mut FnvHashMap<u64, AbortHandle> {
+        self.as_mut().project().in_flight_requests
     }
 
     fn cancel_request(mut self: Pin<&mut Self>, trace_context: &trace::Context, request_id: u64) {
         // It's possible the request was already completed, so it's fine
         // if this is None.
-        if let Some(cancel_handle) = self
-            .as_mut()
-            .project()
-            .in_flight_requests
-            .remove(&request_id)
-        {
-            self.as_mut().project().in_flight_requests.compact(0.1);
+        if let Some(cancel_handle) = self.requests_pin_mut().remove(&request_id) {
+            self.requests_pin_mut().compact(0.1);
 
             cancel_handle.abort();
-            let remaining = self.as_mut().project().in_flight_requests.len();
+            let remaining = self.in_flight_requests.len();
             trace!(
                 "[{}] Request canceled. In-flight requests = {}",
                 trace_context.trace_id,
@@ -250,7 +250,7 @@ where
     fn config(&self) -> &Config;
 
     /// Returns the number of in-flight requests over this channel.
-    fn in_flight_requests(self: Pin<&mut Self>) -> usize;
+    fn in_flight_requests(&self) -> usize;
 
     /// Caps the number of concurrent requests.
     fn max_concurrent_requests(self, n: usize) -> Throttler<Self>
@@ -292,7 +292,7 @@ where
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         loop {
-            match ready!(self.as_mut().project().transport.poll_next(cx)?) {
+            match ready!(self.get_pin_mut().poll_next(cx)?) {
                 Some(message) => match message {
                     ClientMessage::Request(request) => {
                         return Poll::Ready(Some(Ok(request)));
@@ -317,30 +317,28 @@ where
 {
     type Error = io::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        self.project().transport.poll_ready(cx)
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.get_pin_mut().poll_ready(cx)
     }
 
     fn start_send(mut self: Pin<&mut Self>, response: Response<Resp>) -> Result<(), Self::Error> {
         if self
-            .as_mut()
-            .project()
-            .in_flight_requests
+            .requests_pin_mut()
             .remove(&response.request_id)
             .is_some()
         {
-            self.as_mut().project().in_flight_requests.compact(0.1);
+            self.requests_pin_mut().compact(0.1);
         }
 
-        self.project().transport.start_send(response)
+        self.get_pin_mut().start_send(response)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        self.project().transport.poll_flush(cx)
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.get_pin_mut().poll_flush(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        self.project().transport.poll_close(cx)
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.get_pin_mut().poll_close(cx)
     }
 }
 
@@ -361,15 +359,14 @@ where
         &self.config
     }
 
-    fn in_flight_requests(mut self: Pin<&mut Self>) -> usize {
-        self.as_mut().project().in_flight_requests.len()
+    fn in_flight_requests(&self) -> usize {
+        self.in_flight_requests.len()
     }
 
-    fn start_request(self: Pin<&mut Self>, request_id: u64) -> AbortRegistration {
+    fn start_request(mut self: Pin<&mut Self>, request_id: u64) -> AbortRegistration {
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
         assert!(self
-            .project()
-            .in_flight_requests
+            .requests_pin_mut()
             .insert(request_id, abort_handle)
             .is_none());
         abort_registration
@@ -401,17 +398,17 @@ where
     S: Serve<C::Req, Resp = C::Resp>,
 {
     /// Returns the inner channel over which messages are sent and received.
-    pub fn get_pin_channel(self: Pin<&mut Self>) -> Pin<&mut C> {
-        self.project().channel
+    pub fn channel_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut C> {
+        self.as_mut().project().channel
     }
 
     fn pump_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> PollIo<ResponseHandler<C::Req, C::Resp, S>> {
-        match ready!(self.as_mut().project().channel.poll_next(cx)?) {
+        match ready!(self.channel_pin_mut().poll_next(cx)?) {
             Some(request) => {
-                let abort_registration = self.as_mut().project().channel.start_request(request.id);
+                let abort_registration = self.channel_pin_mut().start_request(request.id);
                 Poll::Ready(Some(Ok(ResponseHandler {
                     request,
                     serve: self.server.clone(),
@@ -433,24 +430,24 @@ where
                 trace!(
                     "[{}] Staging response. In-flight requests = {}.",
                     response.context.trace_id(),
-                    self.as_mut().project().channel.in_flight_requests(),
+                    self.channel.in_flight_requests(),
                 );
-                self.as_mut().project().channel.start_send(response)?;
+                self.channel_pin_mut().start_send(response)?;
                 Poll::Ready(Some(Ok(())))
             }
             Poll::Ready(None) => {
                 // Shutdown can't be done before we finish pumping out remaining responses.
-                ready!(self.as_mut().project().channel.poll_flush(cx)?);
+                ready!(self.channel_pin_mut().poll_flush(cx)?);
                 Poll::Ready(None)
             }
             Poll::Pending => {
                 // No more requests to process, so flush any requests buffered in the transport.
-                ready!(self.as_mut().project().channel.poll_flush(cx)?);
+                ready!(self.channel_pin_mut().poll_flush(cx)?);
 
                 // Being here means there are no staged requests and all written responses are
                 // fully flushed. So, if the read half is closed and there are no in-flight
                 // requests, then we can close the write half.
-                if read_half_closed && self.as_mut().project().channel.in_flight_requests() == 0 {
+                if read_half_closed && self.channel.in_flight_requests() == 0 {
                     Poll::Ready(None)
                 } else {
                     Poll::Pending
@@ -464,8 +461,8 @@ where
         cx: &mut Context<'_>,
     ) -> PollIo<Response<C::Resp>> {
         // Ensure there's room to write a response.
-        while let Poll::Pending = self.as_mut().project().channel.poll_ready(cx)? {
-            ready!(self.as_mut().project().channel.poll_flush(cx)?);
+        while let Poll::Pending = self.channel_pin_mut().poll_ready(cx)? {
+            ready!(self.channel_pin_mut().poll_flush(cx)?);
         }
 
         match ready!(self.as_mut().project().pending_responses.poll_next(cx)) {

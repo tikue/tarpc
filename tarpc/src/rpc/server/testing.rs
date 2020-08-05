@@ -31,41 +31,51 @@ pub(crate) struct FakeChannel<In, Out> {
     pub in_flight_requests: FnvHashSet<u64>,
 }
 
+impl<In, Out> FakeChannel<In, Out> {
+    fn stream_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut VecDeque<In>> {
+        self.as_mut().project().stream
+    }
+
+    fn sink_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut VecDeque<Out>> {
+        self.as_mut().project().sink
+    }
+
+    fn in_flight_requests<'a>(self: &'a mut Pin<&mut Self>) -> &'a mut FnvHashSet<u64> {
+        self.as_mut().project().in_flight_requests
+    }
+}
+
 impl<In, Out> Stream for FakeChannel<In, Out>
 where
     In: Unpin,
 {
     type Item = In;
 
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
-        Poll::Ready(self.project().stream.pop_front())
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.stream_pin_mut().pop_front())
     }
 }
 
 impl<In, Resp> Sink<Response<Resp>> for FakeChannel<In, Response<Resp>> {
     type Error = io::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        self.project().sink.poll_ready(cx).map_err(|e| match e {})
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.sink_pin_mut().poll_ready(cx).map_err(|e| match e {})
     }
 
     fn start_send(mut self: Pin<&mut Self>, response: Response<Resp>) -> Result<(), Self::Error> {
-        self.as_mut()
-            .project()
-            .in_flight_requests
-            .remove(&response.request_id);
-        self.project()
-            .sink
+        self.in_flight_requests().remove(&response.request_id);
+        self.sink_pin_mut()
             .start_send(response)
             .map_err(|e| match e {})
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        self.project().sink.poll_flush(cx).map_err(|e| match e {})
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.sink_pin_mut().poll_flush(cx).map_err(|e| match e {})
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        self.project().sink.poll_close(cx).map_err(|e| match e {})
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.sink_pin_mut().poll_close(cx).map_err(|e| match e {})
     }
 }
 
@@ -80,12 +90,12 @@ where
         &self.config
     }
 
-    fn in_flight_requests(self: Pin<&mut Self>) -> usize {
+    fn in_flight_requests(&self) -> usize {
         self.in_flight_requests.len()
     }
 
-    fn start_request(self: Pin<&mut Self>, id: u64) -> AbortRegistration {
-        self.project().in_flight_requests.insert(id);
+    fn start_request(mut self: Pin<&mut Self>, id: u64) -> AbortRegistration {
+        self.in_flight_requests().insert(id);
         AbortHandle::new_pair().1
     }
 }

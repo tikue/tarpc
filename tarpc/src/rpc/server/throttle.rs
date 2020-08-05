@@ -44,6 +44,10 @@ where
             max_in_flight_requests,
         }
     }
+
+    fn get_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut C> {
+        self.as_mut().project().inner
+    }
 }
 
 impl<C> Stream for Throttler<C>
@@ -53,17 +57,16 @@ where
     type Item = <C as Stream>::Item;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        while self.as_mut().in_flight_requests() >= *self.as_mut().project().max_in_flight_requests
-        {
-            ready!(self.as_mut().project().inner.poll_ready(cx)?);
+        while self.as_mut().in_flight_requests() >= self.max_in_flight_requests {
+            ready!(self.get_pin_mut().poll_ready(cx)?);
 
-            match ready!(self.as_mut().project().inner.poll_next(cx)?) {
+            match ready!(self.get_pin_mut().poll_next(cx)?) {
                 Some(request) => {
                     debug!(
                         "[{}] Client has reached in-flight request limit ({}/{}).",
                         request.context.trace_id(),
                         self.as_mut().in_flight_requests(),
-                        self.as_mut().project().max_in_flight_requests,
+                        self.max_in_flight_requests,
                     );
 
                     self.as_mut().start_send(Response {
@@ -78,7 +81,7 @@ where
                 None => return Poll::Ready(None),
             }
         }
-        self.project().inner.poll_next(cx)
+        self.get_pin_mut().poll_next(cx)
     }
 }
 
@@ -88,20 +91,23 @@ where
 {
     type Error = io::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        self.project().inner.poll_ready(cx)
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.get_pin_mut().poll_ready(cx)
     }
 
-    fn start_send(self: Pin<&mut Self>, item: Response<<C as Channel>::Resp>) -> io::Result<()> {
-        self.project().inner.start_send(item)
+    fn start_send(
+        mut self: Pin<&mut Self>,
+        item: Response<<C as Channel>::Resp>,
+    ) -> io::Result<()> {
+        self.get_pin_mut().start_send(item)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        self.project().inner.poll_flush(cx)
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        self.get_pin_mut().poll_flush(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        self.project().inner.poll_close(cx)
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        self.get_pin_mut().poll_close(cx)
     }
 }
 
@@ -118,16 +124,16 @@ where
     type Req = <C as Channel>::Req;
     type Resp = <C as Channel>::Resp;
 
-    fn in_flight_requests(self: Pin<&mut Self>) -> usize {
-        self.project().inner.in_flight_requests()
-    }
-
     fn config(&self) -> &Config {
         self.inner.config()
     }
 
-    fn start_request(self: Pin<&mut Self>, request_id: u64) -> AbortRegistration {
-        self.project().inner.start_request(request_id)
+    fn in_flight_requests(&self) -> usize {
+        self.inner.in_flight_requests()
+    }
+
+    fn start_request(mut self: Pin<&mut Self>, request_id: u64) -> AbortRegistration {
+        self.get_pin_mut().start_request(request_id)
     }
 }
 
@@ -151,6 +157,10 @@ where
             max_in_flight_requests,
         }
     }
+
+    fn get_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut S> {
+        self.as_mut().project().inner
+    }
 }
 
 impl<S> Stream for ThrottlerStream<S>
@@ -161,11 +171,10 @@ where
     type Item = Throttler<<S as Stream>::Item>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        match ready!(self.as_mut().project().inner.poll_next(cx)) {
-            Some(channel) => Poll::Ready(Some(Throttler::new(
-                channel,
-                *self.project().max_in_flight_requests,
-            ))),
+        match ready!(self.get_pin_mut().poll_next(cx)) {
+            Some(channel) => {
+                Poll::Ready(Some(Throttler::new(channel, self.max_in_flight_requests)))
+            }
             None => Poll::Ready(None),
         }
     }
@@ -296,7 +305,7 @@ fn throttler_poll_next_throttled_sink_not_ready() {
         fn config(&self) -> &Config {
             unimplemented!()
         }
-        fn in_flight_requests(self: Pin<&mut Self>) -> usize {
+        fn in_flight_requests(&self) -> usize {
             0
         }
         fn start_request(self: Pin<&mut Self>, _: u64) -> AbortRegistration {

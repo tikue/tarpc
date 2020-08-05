@@ -32,6 +32,12 @@ impl<S, Item, SinkItem, Codec> Transport<S, Item, SinkItem, Codec> {
     pub fn get_ref(&self) -> &S {
         self.inner.get_ref().get_ref()
     }
+
+    fn get_pin_mut<'a>(
+        self: &'a mut Pin<&mut Self>,
+    ) -> Pin<&'a mut SerdeFramed<Framed<S, LengthDelimitedCodec>, Item, SinkItem, Codec>> {
+        self.as_mut().project().inner
+    }
 }
 
 impl<S, Item, SinkItem, Codec, CodecError> Stream for Transport<S, Item, SinkItem, Codec>
@@ -45,8 +51,8 @@ where
 {
     type Item = io::Result<Item>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<io::Result<Item>>> {
-        match self.project().inner.poll_next(cx) {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<io::Result<Item>>> {
+        match self.get_pin_mut().poll_next(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Ready(Some(Ok::<_, CodecError>(next))) => Poll::Ready(Some(Ok(next))),
@@ -68,23 +74,22 @@ where
 {
     type Error = io::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        convert(self.project().inner.poll_ready(cx))
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        convert(self.get_pin_mut().poll_ready(cx))
     }
 
-    fn start_send(self: Pin<&mut Self>, item: SinkItem) -> io::Result<()> {
-        self.project()
-            .inner
+    fn start_send(mut self: Pin<&mut Self>, item: SinkItem) -> io::Result<()> {
+        self.get_pin_mut()
             .start_send(item)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        convert(self.project().inner.poll_flush(cx))
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        convert(self.get_pin_mut().poll_flush(cx))
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        convert(self.project().inner.poll_close(cx))
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        convert(self.get_pin_mut().poll_close(cx))
     }
 }
 
