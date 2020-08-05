@@ -1,3 +1,9 @@
+// Copyright 2020 Google LLC
+//
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+
 //! Largely copied from [http](https://docs.rs/http/0.2.1/src/http/extensions.rs.html), except that
 //! this one is `Clone`.
 
