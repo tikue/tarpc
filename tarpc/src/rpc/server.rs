@@ -114,7 +114,7 @@ pub trait Serve<Req>: Sized + Clone {
     type Fut<'a>: Future<Output = Self::Resp> + Send where Self: 'a;
 
     /// Responds to a single request.
-    fn serve<'a>(self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a>;
+    fn serve(self, ctx: &mut context::Context, req: Req) -> Self::Fut<'_>;
 }
 
 /// A utility trait enabling a stream to fluently chain a request handler.

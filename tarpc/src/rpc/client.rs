@@ -29,7 +29,7 @@ pub trait Client<Req> {
     /// once the request is successfully enqueued.
     ///
     /// [`Future`]: futures::Future
-    fn call<'a>(&'a mut self, ctx: context::Context, request: Req) -> Self::Future<'a>;
+    fn call(&mut self, ctx: context::Context, request: Req) -> Self::Future<'_>;
 
     /// Returns a Client that applies a post-processing function to the returned response.
     fn map_response<F, R>(self, f: F) -> MapResponse<Self, F>
@@ -77,7 +77,7 @@ where
     #[rustfmt::skip]
     type Future<'a> where Self: 'a = futures::future::MapOk<<C as Client<Req>>::Future<'a>, &'a mut F>;
 
-    fn call<'a>(&'a mut self, ctx: context::Context, request: Req) -> Self::Future<'a> {
+    fn call(&mut self, ctx: context::Context, request: Req) -> Self::Future<'_> {
         self.inner.call(ctx, request).map_ok(&mut self.f)
     }
 }
@@ -97,7 +97,7 @@ where
     type Response = Resp;
     type Future<'a> = <C as Client<Req>>::Future<'a>;
 
-    fn call<'a>(&'a mut self, ctx: context::Context, request: Req2) -> Self::Future<'a> {
+    fn call(&mut self, ctx: context::Context, request: Req2) -> Self::Future<'_> {
         self.inner.call(ctx, (self.f)(request))
     }
 }
@@ -117,7 +117,7 @@ where
     type Response = Resp;
     type Future<'a> = <C as Client<Req>>::Future<'a>;
 
-    fn call<'a>(&'a mut self, mut ctx: context::Context, request: Req) -> Self::Future<'a> {
+    fn call(&mut self, mut ctx: context::Context, request: Req) -> Self::Future<'_> {
         (self.f)(&mut ctx);
         self.inner.call(ctx, request)
     }
@@ -126,11 +126,19 @@ where
 impl<Req, Resp> Client<Req> for Channel<Req, Resp> {
     type Response = Resp;
     #[rustfmt::skip]
-    type Future<'a> where Self: 'a = channel::Call<'a, Req, Resp>;
+    type Future<'a> where Self: 'a = impl Future<Output = io::Result<Self::Response>>;
 
-    fn call<'a>(&'a mut self, ctx: context::Context, request: Req) -> channel::Call<'a, Req, Resp> {
+    fn call(&mut self, ctx: context::Context, request: Req) -> Self::Future<'_> {
         self.call(ctx, request)
     }
+}
+
+#[allow(unused)]
+fn ensure_channel_future_is_send_when_req_and_resp_are_send() {
+    struct IsSend;
+    static_assertions::assert_impl_all!(IsSend: Send);
+
+    static_assertions::assert_impl_all!(<Channel<IsSend, IsSend> as Client<_>>::Future<'_>: Send);
 }
 
 /// Settings that control the behavior of the client.
