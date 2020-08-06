@@ -156,8 +156,8 @@ async fn concurrent_join_all() -> io::Result<()> {
 
 #[tarpc::service(derive_serde = false)]
 trait JustCancel {
-    async fn wait(key: String, started: async_channel::Sender<()>, done: async_channel::Sender<()>);
-    async fn status(key: String) -> Option<Status>;
+    async fn wait(key: &'static str, started: async_channel::Sender<()>, done: async_channel::Sender<()>);
+    async fn status(key: &'static str) -> Option<Status>;
 }
 
 #[derive(Debug)]
@@ -167,7 +167,7 @@ enum Status {
 }
 
 struct JustCancelServer {
-    requests: RefCell<HashMap<String, Status>>,
+    requests: RefCell<HashMap<&'static str, Status>>,
 }
 
 impl<'b> JustCancel for &'b JustCancelServer {
@@ -177,7 +177,7 @@ impl<'b> JustCancel for &'b JustCancelServer {
     fn wait<'a>(
         &'a mut self,
         ctx: &'a mut context::Context,
-        key: String,
+        key: &'static str,
         started: async_channel::Sender<()>,
         _done: async_channel::Sender<()>,
     ) -> Self::WaitFut<'a> {
@@ -203,7 +203,7 @@ impl<'b> JustCancel for &'b JustCancelServer {
     #[rustfmt::skip]
     type StatusFut<'a> where 'b: 'a = impl Future<Output = Option<Status>> + 'a;
 
-    fn status<'a>(&'a mut self, _: &'a mut context::Context, key: String) -> Self::StatusFut<'a> {
+    fn status<'a>(&'a mut self, _: &'a mut context::Context, key: &'static str) -> Self::StatusFut<'a> {
         async move { self.requests.borrow_mut().remove(&key) }
     }
 }
@@ -235,7 +235,7 @@ async fn cancellation() -> io::Result<()> {
             // Wait for the server to signal it has started processing the request, then immediately
             // cancel the request.
             tokio::select!(
-                _ = client.wait(context::current(), "key".into(), started, done) => {}
+                _ = client.wait(context::current(), "key", started, done) => {}
                 _ = started_rx.recv() => {}
             );
 
@@ -244,7 +244,7 @@ async fn cancellation() -> io::Result<()> {
             let _ = done_rx.recv().await;
 
             assert_matches!(
-                client.status(context::current(), "key".into()).await,
+                client.status(context::current(), "key").await,
                 Ok(Some(Status::NotDone))
             );
 
