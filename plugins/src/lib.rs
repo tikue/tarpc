@@ -322,7 +322,7 @@ fn transform_method(method: &mut ImplItemMethod) -> ImplItemType {
     }
     if let Some(arg) = inputs.next() {
         if let FnArg::Typed(PatType { ty, .. }) = arg {
-            if let &mut Type::Reference(ref mut reference) = ty.as_mut() {
+            if let Type::Reference(ref mut reference) = ty.as_mut() {
                 if reference.lifetime.is_none() {
                     reference.lifetime = parse_quote! { 'a };
                 }
