@@ -104,7 +104,7 @@ impl<Req, Resp> Server<Req, Resp> {
 }
 
 /// Basically a Fn(Req) -> impl Future<Output = Resp>;
-pub trait Serve<Req>: Sized + Clone {
+pub trait Serve<Req> {
     /// Type of response.
     type Resp;
 
@@ -139,14 +139,11 @@ where
     /// Responds to all requests with [`server::serve`](Serve).
     #[cfg(feature = "tokio1")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
-    fn respond_with<S>(self, server: S) -> Running<Self, S>
+    fn execute<S>(self, serve: S) -> TokioServerExecutor<Self, S>
     where
         S: Serve<C::Req, Resp = C::Resp>,
     {
-        Running {
-            incoming: self,
-            server,
-        }
+        TokioServerExecutor { inner: self, serve }
     }
 }
 
@@ -279,6 +276,20 @@ where
             pending_responses: responses,
             responses_tx,
         }
+    }
+
+    /// Runs the client handler until completion by [spawning](tokio::spawn) each
+    /// response handler onto tokio's default executor.
+    #[cfg(feature = "tokio1")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
+    fn execute<S>(self, serve: S) -> TokioChannelExecutor<ClientHandler<Self>, S>
+    where
+        Self: Sized,
+        S: Serve<Self::Req, Resp = Self::Resp> + Send + Sync + 'static,
+        Self::Req: Send + 'static,
+        Self::Resp: Send + 'static,
+    {
+        self.requests().execute(serve)
     }
 }
 
@@ -571,54 +582,62 @@ where
 
 // Send + 'static execution helper methods.
 
+#[cfg(feature = "tokio1")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
 impl<C> ClientHandler<C>
 where
-    C: Channel + 'static,
+    C: Channel,
     C::Req: Send + 'static,
     C::Resp: Send + 'static,
 {
     /// Runs the client handler until completion by [spawning](tokio::spawn) each
-    /// request handler onto the default executor.
-    #[cfg(feature = "tokio1")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
-    pub async fn execute<S>(self, serve: S)
+    /// response handler onto tokio's default executor.
+    pub fn execute<S>(self, serve: S) -> TokioChannelExecutor<Self, S>
     where
         S: Serve<C::Req, Resp = C::Resp> + Send + Sync + 'static,
     {
-        let me = self;
-        futures::pin_mut!(me);
-        while let Some(response_handler) = me.next().await {
-            match response_handler {
-                Ok(resp) => {
-                    let server = serve.clone();
-                    tokio::spawn(async move {
-                        resp.execute(&server).await;
-                    });
-                }
-                Err(e) => {
-                    log::info!("ClientHandler errored out: {}", e);
-                    return;
-                }
-            }
-        }
-        log::info!("ClientHandler finished.");
+        TokioChannelExecutor { inner: self, serve }
     }
 }
 
-/// A future that drives the server by [spawning](tokio::spawn) channels and request handlers on the default
-/// executor.
+/// A future that drives the server by [spawning](tokio::spawn) a [`TokioChannelExecutor`](TokioChannelExecutor)
+/// for each new channel.
 #[pin_project]
 #[derive(Debug)]
 #[cfg(feature = "tokio1")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
-pub struct Running<St, Se> {
+pub struct TokioServerExecutor<T, S> {
     #[pin]
-    incoming: St,
-    server: Se,
+    inner: T,
+    serve: S,
+}
+
+/// A future that drives the server by [spawning](tokio::spawn) each [response handler](ResponseHandler)
+/// on tokio's default executor.
+#[pin_project]
+#[derive(Debug)]
+#[cfg(feature = "tokio1")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
+pub struct TokioChannelExecutor<T, S> {
+    #[pin]
+    inner: T,
+    serve: S,
+}
+
+impl<T, S> TokioServerExecutor<T, S> {
+    fn inner_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut T> {
+        self.as_mut().project().inner
+    }
+}
+
+impl<T, S> TokioChannelExecutor<T, S> {
+    fn inner_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut T> {
+        self.as_mut().project().inner
+    }
 }
 
 #[cfg(feature = "tokio1")]
-impl<St, C, Se> Future for Running<St, Se>
+impl<St, C, Se> Future for TokioServerExecutor<St, Se>
 where
     St: Sized + Stream<Item = C>,
     C: Channel + Send + 'static,
@@ -629,14 +648,38 @@ where
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        while let Some(channel) = ready!(self.as_mut().project().incoming.poll_next(cx)) {
-            tokio::spawn(
-                channel
-                    .requests()
-                    .execute(self.as_mut().project().server.clone()),
-            );
+        while let Some(channel) = ready!(self.inner_pin_mut().poll_next(cx)) {
+            tokio::spawn(channel.execute(self.serve.clone()));
         }
         log::info!("Server shutting down.");
+        Poll::Ready(())
+    }
+}
+
+impl<C, S> Future for TokioChannelExecutor<ClientHandler<C>, S>
+where
+    C: Channel + 'static,
+    C::Req: Send + 'static,
+    C::Resp: Send + 'static,
+    S: Serve<C::Req, Resp = C::Resp> + Send + Sync + 'static + Clone,
+{
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        while let Some(response_handler) = ready!(self.inner_pin_mut().poll_next(cx)) {
+            match response_handler {
+                Ok(resp) => {
+                    let server = self.serve.clone();
+                    tokio::spawn(async move {
+                        resp.execute(&server).await;
+                    });
+                }
+                Err(e) => {
+                    log::info!("ClientHandler errored out: {}", e);
+                    break;
+                }
+            }
+        }
         Poll::Ready(())
     }
 }

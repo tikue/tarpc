@@ -109,10 +109,10 @@ impl Subscriber {
     ) -> anyhow::Result<SubscriberHandle> {
         let publisher = tcp::connect(publisher_addr, Json::default()).await?;
         let local_addr = publisher.local_addr()?;
-        let mut handler = server::BaseChannel::with_defaults(publisher).requests();
+        let mut requests = server::BaseChannel::with_defaults(publisher).requests();
         let subscriber = Subscriber { local_addr, topics }.serve();
         // The first request is for the topics being subscriibed to.
-        match handler.next().await {
+        match requests.next().await {
             Some(init_topics) => {
                 init_topics
                     .context("Initializing topics")?
@@ -126,7 +126,7 @@ impl Subscriber {
                 ))
             }
         };
-        let (handler, abort_handle) = future::abortable(handler.execute(subscriber));
+        let (handler, abort_handle) = future::abortable(requests.execute(subscriber));
         tokio::spawn(async move {
             match handler.await {
                 Ok(()) | Err(future::Aborted) => info!("[{}] subscriber shutdown.", local_addr),
@@ -171,7 +171,6 @@ impl Publisher {
             info!("[{}] publisher connected.", publisher.peer_addr().unwrap());
 
             server::BaseChannel::with_defaults(publisher)
-                .requests()
                 .execute(self.serve())
                 .await
         });

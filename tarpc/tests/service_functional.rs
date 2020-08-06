@@ -42,11 +42,7 @@ async fn sequential() -> io::Result<()> {
 
     let (tx, rx) = channel::unbounded();
 
-    tokio::spawn(
-        BaseChannel::new(server::Config::default(), rx)
-            .requests()
-            .execute(Server.serve()),
-    );
+    tokio::spawn(BaseChannel::new(server::Config::default(), rx).execute(Server.serve()));
 
     let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
 
@@ -68,7 +64,7 @@ async fn serde() -> io::Result<()> {
     tokio::spawn(
         tarpc::Server::default()
             .incoming(transport.take(1).filter_map(|r| async { r.ok() }))
-            .respond_with(Server.serve()),
+            .execute(Server.serve()),
     );
 
     let transport = serde_transport::tcp::connect(addr, Json::default()).await?;
@@ -91,7 +87,7 @@ async fn concurrent() -> io::Result<()> {
     tokio::spawn(
         tarpc::Server::default()
             .incoming(stream::once(ready(rx)))
-            .respond_with(Server.serve()),
+            .execute(Server.serve()),
     );
 
     let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
@@ -115,7 +111,7 @@ async fn concurrent_join() -> io::Result<()> {
     tokio::spawn(
         tarpc::Server::default()
             .incoming(stream::once(ready(rx)))
-            .respond_with(Server.serve()),
+            .execute(Server.serve()),
     );
 
     let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
@@ -139,7 +135,7 @@ async fn concurrent_join_all() -> io::Result<()> {
     tokio::spawn(
         tarpc::Server::default()
             .incoming(stream::once(ready(rx)))
-            .respond_with(Server.serve()),
+            .execute(Server.serve()),
     );
 
     let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
