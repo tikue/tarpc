@@ -156,7 +156,11 @@ async fn concurrent_join_all() -> io::Result<()> {
 
 #[tarpc::service(derive_serde = false)]
 trait JustCancel {
-    async fn wait(key: &'static str, started: async_channel::Sender<()>, done: async_channel::Sender<()>);
+    async fn wait(
+        key: &'static str,
+        started: async_channel::Sender<()>,
+        done: async_channel::Sender<()>,
+    );
     async fn status(key: &'static str) -> Option<Status>;
 }
 
@@ -203,7 +207,11 @@ impl<'b> JustCancel for &'b JustCancelServer {
     #[rustfmt::skip]
     type StatusFut<'a> where 'b: 'a = impl Future<Output = Option<Status>> + 'a;
 
-    fn status<'a>(&'a mut self, _: &'a mut context::Context, key: &'static str) -> Self::StatusFut<'a> {
+    fn status<'a>(
+        &'a mut self,
+        _: &'a mut context::Context,
+        key: &'static str,
+    ) -> Self::StatusFut<'a> {
         async move { self.requests.borrow_mut().remove(&key) }
     }
 }

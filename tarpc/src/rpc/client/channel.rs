@@ -59,6 +59,18 @@ impl<Req, Resp> Channel<Req, Resp> {
         let (response_completion, response) = async_channel::bounded(1);
         let cancellation = self.cancellation.clone();
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        // The DispatchResponse is responsible for request cancellation if the client loses interest
+        // (signalled by dropping the request before it's complete). As such, it needs to be
+        // initialized *before* sending a message to the dispatch task, because Futures executors
+        // makes no scheduling guarantees that the entire future will be executed, and it's possible
+        // for the initialization to never run. As long as initialization happens before message
+        // sending, no initialization entails no message sending.
+        let response = DispatchResponse {
+            response,
+            complete: false,
+            request_id,
+            cancellation,
+        };
         self.to_dispatch
             .send(DispatchRequest {
                 ctx,
@@ -69,12 +81,7 @@ impl<Req, Resp> Channel<Req, Resp> {
             .await
             .map_err(|_| io::Error::from(io::ErrorKind::ConnectionReset))?;
 
-        Ok(DispatchResponse {
-            response,
-            complete: false,
-            request_id,
-            cancellation,
-        })
+        Ok(response)
     }
 
     /// Sends a request to the dispatch task to forward to the server, returning a [`Future`] that
@@ -141,8 +148,8 @@ impl<Resp> PinnedDrop for DispatchResponse<Resp> {
             // for a client no longer waiting for a response. To avoid this, the dispatch task
             // checks if the receiver is closed before inserting the request in the map. By
             // closing the receiver before sending the cancel message, it is guaranteed that if the
-            // dispatch task misses an early-arriving cancellation message, then it will see the
-            // receiver as closed.
+            // dispatch task discards an early-arriving cancellation message, then it will see the
+            // receiver as closed when it gets around to processing the outbound request.
             self.response.close();
             let request_id = self.request_id;
             self.cancellation.cancel(request_id);
