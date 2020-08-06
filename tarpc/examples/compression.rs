@@ -128,7 +128,7 @@ struct HelloServer;
 
 #[tarpc::server]
 impl World for HelloServer {
-    async fn hello(&self, ctx: &mut context::Context, name: String) -> String {
+    async fn hello(&mut self, ctx: &mut context::Context, name: String) -> String {
         let serialized_size = ctx
             .extensions
             .get::<SerializedSize>()

@@ -14,15 +14,15 @@ fn att_service_trait() {
 
     #[tarpc::server]
     impl Foo for () {
-        async fn two_part(&self, _: &mut context::Context, s: String, i: i32) -> (String, i32) {
+        async fn two_part(&mut self, _: &mut context::Context, s: String, i: i32) -> (String, i32) {
             (s, i)
         }
 
-        async fn bar(&self, _: &mut context::Context, s: String) -> String {
+        async fn bar(&mut self, _: &mut context::Context, s: String) -> String {
             s
         }
 
-        async fn baz(&self, _: &mut context::Context) {}
+        async fn baz(&mut self, _: &mut context::Context) {}
     }
 }
 
@@ -43,7 +43,7 @@ fn raw_idents() {
     impl r#trait for () {
         type AwaitFut<'a> = Ready<(r#yield, i32)>;
         fn r#await<'a>(
-            &'a self,
+            &'a mut self,
             _: &'a mut context::Context,
             r#struct: r#yield,
             r#enum: i32,
@@ -52,12 +52,12 @@ fn raw_idents() {
         }
 
         type FnFut<'a> = Ready<r#yield>;
-        fn r#fn<'a>(&'a self, _: &'a mut context::Context, r#impl: r#yield) -> Self::FnFut<'a> {
+        fn r#fn<'a>(&'a mut self, _: &'a mut context::Context, r#impl: r#yield) -> Self::FnFut<'a> {
             ready(r#impl)
         }
 
         type AsyncFut<'a> = Ready<()>;
-        fn r#async<'a>(&'a self, _: &'a mut context::Context) -> Self::AsyncFut<'a> {
+        fn r#async<'a>(&'a mut self, _: &'a mut context::Context) -> Self::AsyncFut<'a> {
             ready(())
         }
     }

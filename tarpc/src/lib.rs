@@ -124,7 +124,7 @@
 //!
 //! #[tarpc::server]
 //! impl World for HelloServer {
-//!     async fn hello(&self, _: &mut context::Context, name: String) -> String {
+//!     async fn hello(&mut self, _: &mut context::Context, name: String) -> String {
 //!         format!("Hello, {}!", name)
 //!     }
 //! }
@@ -161,7 +161,7 @@
 //! # struct HelloServer;
 //! # #[tarpc::server]
 //! # impl World for HelloServer {
-//! #     async fn hello(&self, _: &mut context::Context, name: String) -> String {
+//! #     async fn hello(&mut self, _: &mut context::Context, name: String) -> String {
 //! #         format!("Hello, {}!", name)
 //! #     }
 //! # }
@@ -259,7 +259,7 @@ pub use tarpc_plugins::service;
 ///
 /// #[tarpc::server]
 /// impl World for HelloServer {
-///     async fn hello(&self, _: &mut context::Context, name: String) -> String {
+///     async fn hello(&mut self, _: &mut context::Context, name: String) -> String {
 ///         format!("Hello, {}! You are connected from {:?}.", name, self.0)
 ///     }
 /// }
@@ -285,7 +285,7 @@ pub use tarpc_plugins::service;
 /// impl World for HelloServer {
 ///     type HelloFut<'a> = Pin<Box<dyn Future<Output = String> + Send + 'a>>;
 ///
-///     fn hello<'a>(&'a self, _: &'a mut context::Context, name: String) -> Self::HelloFut<'a> {
+///     fn hello<'a>(&'a mut self, _: &'a mut context::Context, name: String) -> Self::HelloFut<'a> {
 ///         Box::pin(async move {
 ///             format!("Hello, {}! You are connected from {:?}.", name, self.0)
 ///         })

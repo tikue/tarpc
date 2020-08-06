@@ -113,7 +113,7 @@ pub trait Serve<Req> {
     type Fut<'a>: Future<Output = Self::Resp> where Self: 'a;
 
     /// Responds to a single request.
-    fn serve<'a>(&'a self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a>;
+    fn serve<'a>(&'a mut self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a>;
 }
 
 /// A utility trait enabling a stream to fluently chain a request handler.
@@ -499,7 +499,7 @@ pub struct ResponseHandler<Req, Res> {
 
 impl<Req, Res> ResponseHandler<Req, Res> {
     /// Runs until response completion.
-    pub fn execute<'a, S>(self, serve: &'a S) -> impl Future<Output = ()> + 'a
+    pub fn execute<'a, S>(self, serve: &'a mut S) -> impl Future<Output = ()> + 'a
     where
         S: Serve<Req, Resp = Res>,
         Req: 'a,
@@ -685,9 +685,9 @@ where
         while let Some(response_handler) = ready!(self.inner_pin_mut().poll_next(cx)) {
             match response_handler {
                 Ok(resp) => {
-                    let server = self.serve.clone();
+                    let mut server = self.serve.clone();
                     tokio::spawn(async move {
-                        resp.execute(&server).await;
+                        resp.execute(&mut server).await;
                     });
                 }
                 Err(e) => {

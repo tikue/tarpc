@@ -37,7 +37,7 @@ struct AddServer;
 
 #[tarpc::server]
 impl AddService for AddServer {
-    async fn add(&self, _: &mut context::Context, x: i32, y: i32) -> i32 {
+    async fn add(&mut self, _: &mut context::Context, x: i32, y: i32) -> i32 {
         x + y
     }
 }
@@ -49,7 +49,7 @@ struct DoubleServer {
 
 #[tarpc::server]
 impl DoubleService for DoubleServer {
-    async fn double(&self, _: &mut context::Context, x: i32) -> Result<i32, String> {
+    async fn double(&mut self, _: &mut context::Context, x: i32) -> Result<i32, String> {
         self.add_client
             .add(context::current(), x, x)
             .await

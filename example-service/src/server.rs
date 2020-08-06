@@ -27,7 +27,7 @@ struct HelloServer(SocketAddr);
 
 #[tarpc::server]
 impl World for HelloServer {
-    async fn hello(&self, _: &mut context::Context, name: String) -> String {
+    async fn hello(&mut self, _: &mut context::Context, name: String) -> String {
         format!("Hello, {}! You are connected from {:?}.", name, self.0)
     }
 }

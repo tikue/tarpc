@@ -18,7 +18,7 @@ fn type_generation_works() {
     #[tarpc::server]
     impl Foo for () {
         async fn two_part<'a>(
-            &'a self,
+            &'a mut self,
             _: &'a mut context::Context,
             s: String,
             i: i32,
@@ -26,11 +26,11 @@ fn type_generation_works() {
             (s, i)
         }
 
-        async fn bar<'a>(&'a self, _: &'a mut context::Context, s: String) -> String {
+        async fn bar<'a>(&'a mut self, _: &'a mut context::Context, s: String) -> String {
             s
         }
 
-        async fn baz<'a>(&'a self, _: &'a mut context::Context) {}
+        async fn baz<'a>(&'a mut self, _: &'a mut context::Context) {}
     }
 
     static_assertions::assert_impl_all!(<() as Foo>::TwoPartFut<'_>: Future<Output = (String, i32)>, Send);
@@ -53,7 +53,7 @@ fn raw_idents_work() {
     #[tarpc::server]
     impl r#trait for () {
         async fn r#await<'a>(
-            &'a self,
+            &'a mut self,
             _: &'a mut context::Context,
             r#struct: r#yield,
             r#enum: i32,
@@ -61,11 +61,11 @@ fn raw_idents_work() {
             (r#struct, r#enum)
         }
 
-        async fn r#fn<'a>(&'a self, _: &'a mut context::Context, r#impl: r#yield) -> r#yield {
+        async fn r#fn<'a>(&'a mut self, _: &'a mut context::Context, r#impl: r#yield) -> r#yield {
             r#impl
         }
 
-        async fn r#async<'a>(&'a self, _: &'a mut context::Context) {}
+        async fn r#async<'a>(&'a mut self, _: &'a mut context::Context) {}
     }
 }
 
@@ -94,30 +94,30 @@ fn syntax() {
 
     #[tarpc::server]
     impl Syntax for () {
-        async fn no_lifetimes(&self, _: &mut context::Context) {}
+        async fn no_lifetimes(&mut self, _: &mut context::Context) {}
 
         #[deny(warnings)]
         #[allow(non_snake_case)]
-        async fn TestCamelCaseDoesntConflict<'a>(&self, _: &'a mut context::Context) {}
+        async fn TestCamelCaseDoesntConflict<'a>(&mut self, _: &'a mut context::Context) {}
 
-        async fn hello<'a>(&self, _: &'a mut context::Context) -> String {
+        async fn hello<'a>(&mut self, _: &'a mut context::Context) -> String {
             String::new()
         }
 
-        async fn attr<'a>(&self, _: &'a mut context::Context, _s: String) -> String {
+        async fn attr<'a>(&mut self, _: &'a mut context::Context, _s: String) -> String {
             String::new()
         }
 
-        async fn no_args_no_return<'a>(&self, _: &'a mut context::Context) {}
+        async fn no_args_no_return<'a>(&mut self, _: &'a mut context::Context) {}
 
-        async fn no_args<'a>(&self, _: &'a mut context::Context) -> () {}
+        async fn no_args<'a>(&mut self, _: &'a mut context::Context) -> () {}
 
-        async fn one_arg<'a>(&self, _: &'a mut context::Context, _one: String) -> i32 {
+        async fn one_arg<'a>(&mut self, _: &'a mut context::Context, _one: String) -> i32 {
             0
         }
 
         async fn two_args_no_return<'a>(
-            &'a self,
+            &'a mut self,
             _: &'a mut context::Context,
             _one: String,
             _two: u64,
@@ -125,7 +125,7 @@ fn syntax() {
         }
 
         async fn two_args<'a>(
-            &'a self,
+            &'a mut self,
             _: &'a mut context::Context,
             _one: String,
             _two: u64,
@@ -133,22 +133,22 @@ fn syntax() {
             String::new()
         }
 
-        async fn no_args_ret_error<'a>(&'a self, _: &'a mut context::Context) -> i32 {
+        async fn no_args_ret_error<'a>(&'a mut self, _: &'a mut context::Context) -> i32 {
             0
         }
 
         async fn one_arg_ret_error<'a>(
-            &'a self,
+            &'a mut self,
             _: &'a mut context::Context,
             _one: String,
         ) -> String {
             String::new()
         }
 
-        async fn no_arg_implicit_return_error<'a>(&'a self, _: &'a mut context::Context) {}
+        async fn no_arg_implicit_return_error<'a>(&'a mut self, _: &'a mut context::Context) {}
 
         async fn one_arg_implicit_return_error<'a>(
-            &'a self,
+            &'a mut self,
             _: &'a mut context::Context,
             _one: String,
         ) {

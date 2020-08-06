@@ -82,11 +82,11 @@ struct Subscriber {
 
 #[tarpc::server]
 impl subscriber::Subscriber for Subscriber {
-    async fn topics(&self, _: &mut context::Context) -> Vec<String> {
+    async fn topics(&mut self, _: &mut context::Context) -> Vec<String> {
         self.topics.clone()
     }
 
-    async fn receive(&self, _: &mut context::Context, topic: String, message: String) {
+    async fn receive(&mut self, _: &mut context::Context, topic: String, message: String) {
         info!(
             "[{}] received message on topic '{}': {}",
             self.local_addr, topic, message
@@ -110,13 +110,13 @@ impl Subscriber {
         let publisher = tcp::connect(publisher_addr, Json::default()).await?;
         let local_addr = publisher.local_addr()?;
         let mut requests = server::BaseChannel::with_defaults(publisher).requests();
-        let subscriber = Subscriber { local_addr, topics }.serve();
+        let mut subscriber = Subscriber { local_addr, topics }.serve();
         // The first request is for the topics being subscriibed to.
         match requests.next().await {
             Some(init_topics) => {
                 init_topics
                     .context("Initializing topics")?
-                    .execute(&subscriber)
+                    .execute(&mut subscriber)
                     .await
             }
             None => {
@@ -270,7 +270,7 @@ impl Publisher {
 
 #[tarpc::server]
 impl publisher::Publisher for Publisher {
-    async fn publish(&self, _: &mut context::Context, topic: String, message: String) {
+    async fn publish(&mut self, _: &mut context::Context, topic: String, message: String) {
         info!("received message to publish.");
         let mut subscribers = match self.subscriptions.read().unwrap().get(&topic) {
             None => return,
