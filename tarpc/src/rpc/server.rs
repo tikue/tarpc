@@ -110,7 +110,7 @@ pub trait Serve<Req> {
 
     /// Type of response future.
     #[rustfmt::skip]
-    type Fut<'a>: Future<Output = Self::Resp> + Send where Self: 'a;
+    type Fut<'a>: Future<Output = Self::Resp> where Self: 'a;
 
     /// Responds to a single request.
     fn serve<'a>(&'a self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a>;
@@ -225,6 +225,14 @@ where
     }
 }
 
+mod send {
+    /// This variant Send trait includes a lifetime bound, which is (for
+    /// some reason) required in order to make the trait bounds work in generic code.
+    /// See https://github.com/rust-lang/rust/issues/56556
+    pub trait Send<'a>: std::marker::Send {}
+    impl<'a, T: std::marker::Send> Send<'a> for T {}
+}
+
 /// The server end of an open connection with a client, streaming in requests from, and sinking
 /// responses to, the client.
 ///
@@ -286,6 +294,7 @@ where
     where
         Self: Sized,
         S: Serve<Self::Req, Resp = Self::Resp> + Send + Sync + 'static,
+        for<'a> S::Fut<'a>: send::Send<'a>,
         Self::Req: Send + 'static,
         Self::Resp: Send + 'static,
     {
@@ -503,8 +512,13 @@ impl<Req, Res> ResponseHandler<Req, Res> {
         } = self;
         Abortable::new(
             async move {
-                let trace_id = *request.context.trace_id();
-                let deadline = request.context.deadline;
+                let Request {
+                    mut context,
+                    message,
+                    id: request_id,
+                } = request;
+                let trace_id = *context.trace_id();
+                let deadline = context.deadline;
                 let timeout = deadline.time_until();
                 trace!(
                     "[{}] Handling request with deadline {} (timeout {:?}).",
@@ -512,11 +526,6 @@ impl<Req, Res> ResponseHandler<Req, Res> {
                     format_rfc3339(deadline),
                     timeout,
                 );
-                let Request {
-                    mut context,
-                    message,
-                    id: request_id,
-                } = request;
                 let result =
                     tokio::time::timeout(timeout, serve.serve(&mut context, message)).await;
                 let response = Response {
@@ -624,12 +633,16 @@ pub struct TokioChannelExecutor<T, S> {
     serve: S,
 }
 
+#[cfg(feature = "tokio1")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
 impl<T, S> TokioServerExecutor<T, S> {
     fn inner_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut T> {
         self.as_mut().project().inner
     }
 }
 
+#[cfg(feature = "tokio1")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
 impl<T, S> TokioChannelExecutor<T, S> {
     fn inner_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut T> {
         self.as_mut().project().inner
@@ -644,6 +657,7 @@ where
     C::Req: Send + 'static,
     C::Resp: Send + 'static,
     Se: Serve<C::Req, Resp = C::Resp> + Send + Sync + 'static + Clone,
+    for<'a> Se::Fut<'a>: send::Send<'a>,
 {
     type Output = ();
 
@@ -656,12 +670,14 @@ where
     }
 }
 
+#[cfg(feature = "tokio1")]
 impl<C, S> Future for TokioChannelExecutor<ClientHandler<C>, S>
 where
     C: Channel + 'static,
     C::Req: Send + 'static,
     C::Resp: Send + 'static,
     S: Serve<C::Req, Resp = C::Resp> + Send + Sync + 'static + Clone,
+    for<'a> S::Fut<'a>: send::Send<'a>,
 {
     type Output = ();
 
