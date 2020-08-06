@@ -155,7 +155,6 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         let transport = incoming.next().await.unwrap().unwrap();
         BaseChannel::with_defaults(add_compression(transport))
-            .requests()
             .execute(HelloServer.serve())
             .await;
     });

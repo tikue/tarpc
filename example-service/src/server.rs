@@ -72,7 +72,7 @@ async fn main() -> io::Result<()> {
         // the generated World trait.
         .map(|channel| {
             let server = HelloServer(channel.as_ref().as_ref().peer_addr().unwrap());
-            channel.requests().execute(server.serve())
+            channel.execute(server.serve())
         })
         // Max 10 channels.
         .buffer_unordered(10)
