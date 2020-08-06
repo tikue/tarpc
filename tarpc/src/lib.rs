@@ -30,7 +30,7 @@
 //! Some other features of tarpc:
 //! - Pluggable transport: any type impling `Stream<Item = Request> + Sink<Response>` can be
 //!   used as a transport to connect the client and server.
-//! - `Send + 'static` optional: if the transport doesn't require it, neither does tarpc!
+//! - `Send` optional: if the transport doesn't require it, neither does tarpc!
 //! - Cascading cancellation: dropping a request will send a cancellation message to the server.
 //!   The server will cease any unfinished work on the request, subsequently cancelling any of its
 //!   own requests, repeating for the entire chain of transitive dependencies.
@@ -47,7 +47,7 @@
 //! Add to your `Cargo.toml` dependencies:
 //!
 //! ```toml
-//! tarpc = "0.22.0"
+//! tarpc = { version = "0.22.0", features = ["full"] }
 //! ```
 //!
 //! The `tarpc::service` attribute expands to a collection of items that form an rpc service.

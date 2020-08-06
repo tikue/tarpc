@@ -113,13 +113,8 @@ implement it for our Server struct.
 struct HelloServer;
 
 impl World for HelloServer {
-    // Each defined rpc generates two items in the trait, a fn that serves the RPC, and
-    // an associated type representing the future output by the fn.
-
-    type HelloFut = Ready<String>;
-
-    fn hello(self, _: context::Context, name: String) -> Self::HelloFut {
-        future::ready(format!("Hello, {}!", name))
+    async fn hello(&self, _: &mut context::Context, name: String) -> String {
+        format!("Hello, {}!", name)
     }
 }
 ```
@@ -138,7 +133,7 @@ async fn main() -> io::Result<()> {
         // incoming() takes a stream of transports such as would be returned by
         // TcpListener::incoming (but a stream instead of an iterator).
         .incoming(stream::once(future::ready(server_transport)))
-        .respond_with(HelloServer.serve());
+        .execute(HelloServer.serve());
 
     tokio::spawn(server);
 
