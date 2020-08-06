@@ -7,7 +7,6 @@
 use super::{Config, NewClient};
 use crate::{
     context,
-    trace::SpanId,
     util::{Compact, TimeUntil},
     ClientMessage, PollContext, PollIo, Request, Response, Transport,
 };
@@ -55,8 +54,7 @@ impl<Req, Resp> Channel<Req, Resp> {
         request: Req,
     ) -> io::Result<DispatchResponse<Resp>> {
         // Convert the context to the call context.
-        ctx.trace_context.parent_id = Some(ctx.trace_context.span_id);
-        ctx.trace_context.span_id = SpanId::random(&mut rand::thread_rng());
+        ctx.trace_context = ctx.trace_context.new_child();
 
         let (response_completion, response) = async_channel::bounded(1);
         let cancellation = self.cancellation.clone();
