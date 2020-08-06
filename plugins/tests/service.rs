@@ -1,5 +1,5 @@
 #![allow(incomplete_features)]
-#![feature(generic_associated_types)]
+#![feature(generic_associated_types, type_alias_impl_trait)]
 
 use tarpc::context;
 

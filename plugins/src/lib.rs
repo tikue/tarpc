@@ -141,19 +141,22 @@ impl Parse for RpcMethod {
     }
 }
 
-// If `derive_serde` meta item is not present, defaults to cfg!(feature = "serde1").
-// `derive_serde` can only be true when serde1 is enabled.
-struct DeriveSerde(bool);
+struct AttributeOptions {
+    // If `derive_serde` meta item is not present, defaults to cfg!(feature = "serde1").
+    // `derive_serde` can only be true when serde1 is enabled.
+    derive_serde: bool,
+}
 
-impl Parse for DeriveSerde {
+impl Parse for AttributeOptions {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut result = Ok(None);
-        let mut derive_serde = Vec::new();
+        let mut errors = Ok(());
+        let mut derive_serde = None;
+        let mut derive_serde_occurs = Vec::new();
         let meta_items = input.parse_terminated::<MetaNameValue, Comma>(MetaNameValue::parse)?;
         for meta in meta_items {
             if meta.path.segments.len() != 1 {
                 extend_errors!(
-                    result,
+                    errors,
                     syn::Error::new(
                         meta.span(),
                         "tarpc::service does not support this meta item"
@@ -162,44 +165,27 @@ impl Parse for DeriveSerde {
                 continue;
             }
             let segment = meta.path.segments.first().unwrap();
-            if segment.ident != "derive_serde" {
+            if segment.ident == "derive_serde" {
+                match Self::parse_derive_serde(&meta) {
+                    Ok(derive) => derive_serde = derive,
+                    Err(e) => extend_errors!(errors, e),
+                }
+                derive_serde_occurs.push(meta);
+            } else {
                 extend_errors!(
-                    result,
+                    errors,
                     syn::Error::new(
                         meta.span(),
                         "tarpc::service does not support this meta item"
                     )
                 );
-                continue;
             }
-            match meta.lit {
-                Lit::Bool(LitBool { value: true, .. }) if cfg!(feature = "serde1") => {
-                    result = result.and(Ok(Some(true)))
-                }
-                Lit::Bool(LitBool { value: true, .. }) => {
-                    extend_errors!(
-                        result,
-                        syn::Error::new(
-                            meta.span(),
-                            "To enable serde, first enable the `serde1` feature of tarpc"
-                        )
-                    );
-                }
-                Lit::Bool(LitBool { value: false, .. }) => result = result.and(Ok(Some(false))),
-                _ => extend_errors!(
-                    result,
-                    syn::Error::new(
-                        meta.lit.span(),
-                        "`derive_serde` expects a value of type `bool`"
-                    )
-                ),
-            }
-            derive_serde.push(meta);
         }
-        if derive_serde.len() > 1 {
-            for (i, derive_serde) in derive_serde.iter().enumerate() {
+
+        if derive_serde_occurs.len() > 1 {
+            for (i, derive_serde) in derive_serde_occurs.iter().enumerate() {
                 extend_errors!(
-                    result,
+                    errors,
                     syn::Error::new(
                         derive_serde.span(),
                         format!(
@@ -210,8 +196,26 @@ impl Parse for DeriveSerde {
                 );
             }
         }
-        let derive_serde = result?.unwrap_or(cfg!(feature = "serde1"));
-        Ok(Self(derive_serde))
+        errors?;
+        let derive_serde = derive_serde.unwrap_or(cfg!(feature = "serde1"));
+        Ok(Self { derive_serde })
+    }
+}
+
+impl AttributeOptions {
+    fn parse_derive_serde(meta: &MetaNameValue) -> syn::Result<Option<bool>> {
+        match meta.lit {
+            Lit::Bool(LitBool { value: true, .. }) if cfg!(feature = "serde1") => Ok(Some(true)),
+            Lit::Bool(LitBool { value: true, .. }) => Err(syn::Error::new(
+                meta.span(),
+                "To enable serde, first enable the `serde1` feature of tarpc",
+            )),
+            Lit::Bool(LitBool { value: false, .. }) => Ok(Some(false)),
+            _ => Err(syn::Error::new(
+                meta.lit.span(),
+                "`derive_serde` expects a value of type `bool`",
+            )),
+        }
     }
 }
 
@@ -224,7 +228,7 @@ impl Parse for DeriveSerde {
 /// - ResponseFut Future
 #[proc_macro_attribute]
 pub fn service(attr: TokenStream, input: TokenStream) -> TokenStream {
-    let derive_serde = parse_macro_input!(attr as DeriveSerde);
+    let options = parse_macro_input!(attr as AttributeOptions);
     let unit_type: &Type = &parse_quote!(());
     let Service {
         ref attrs,
@@ -238,18 +242,15 @@ pub fn service(attr: TokenStream, input: TokenStream) -> TokenStream {
         .map(|rpc| snake_to_camel(&rpc.ident.unraw().to_string()))
         .collect();
     let args: &[&[PatType]] = &rpcs.iter().map(|rpc| &*rpc.args).collect::<Vec<_>>();
-    let response_fut_name = &format!("{}ResponseFut", ident.unraw());
-    let derive_serialize = if derive_serde.0 {
+    let derive_serialize = if options.derive_serde {
         Some(quote!(#[derive(serde::Serialize, serde::Deserialize)]))
     } else {
         None
     };
 
     ServiceGenerator {
-        response_fut_name,
         service_ident: ident,
         server_ident: &format_ident!("Serve{}", ident),
-        response_fut_ident: &Ident::new(&response_fut_name, ident.span()),
         client_ident: &format_ident!("{}Client", ident),
         request_ident: &format_ident!("{}Request", ident),
         response_ident: &format_ident!("{}Response", ident),
@@ -330,23 +331,15 @@ fn transform_method(method: &mut ImplItemMethod) -> ImplItemType {
     }
 
     // generate the updated return signature.
-    method.sig.output = parse_quote! {
-        -> ::core::pin::Pin<Box<
-                dyn ::core::future::Future<Output = #ret> + Send + 'a
-            >>
-    };
+    method.sig.output = parse_quote! { -> Self::#fut_name_ident<'a> };
 
-    // transform the body of the method into Box::pin(async move { body }).
+    // transform the body of the method into async move { body }.
     let block = method.block.clone();
-    method.block = parse_quote! [{
-        Box::pin(async move
-            #block
-        )
-    }];
+    method.block = parse_quote! [{ async move #block }];
 
     // generate and return type declaration for return type.
     let t: ImplItemType = parse_quote! {
-        type #fut_name_ident<'a> = ::core::pin::Pin<Box<dyn ::core::future::Future<Output = #ret> + Send +  'a>>;
+        type #fut_name_ident<'a> = impl ::core::future::Future<Output = #ret> + 'a;
     };
 
     t
@@ -432,8 +425,6 @@ fn verify_types_were_provided(
 struct ServiceGenerator<'a> {
     service_ident: &'a Ident,
     server_ident: &'a Ident,
-    response_fut_ident: &'a Ident,
-    response_fut_name: &'a str,
     client_ident: &'a Ident,
     request_ident: &'a Ident,
     response_ident: &'a Ident,
@@ -480,7 +471,7 @@ impl<'a> ServiceGenerator<'a> {
                     let ty_doc = format!("The response future returned by {}.", ident);
                     quote! {
                         #[doc = #ty_doc]
-                        type #future_type<'a>: std::future::Future<Output = #output> + Send where Self: 'a;
+                        type #future_type<'a>: std::future::Future<Output = #output> where Self: 'a;
 
                         #( #attrs )*
                         fn #ident<'a>(&'a self, context: &'a mut tarpc::context::Context, #( #args ),*) -> Self::#future_type<'a>;
@@ -490,7 +481,7 @@ impl<'a> ServiceGenerator<'a> {
 
         quote! {
             #( #attrs )*
-            #vis trait #service_ident: Clone {
+            #vis trait #service_ident where Self: Sized {
                 #( #types_and_fns )*
 
                 /// Returns a serving function to use with [tarpc::server::Channel::respond_with].
@@ -521,7 +512,6 @@ impl<'a> ServiceGenerator<'a> {
             server_ident,
             service_ident,
             response_ident,
-            response_fut_ident,
             camel_case_idents,
             arg_pats,
             method_idents,
@@ -533,19 +523,21 @@ impl<'a> ServiceGenerator<'a> {
                 where S: #service_ident
             {
                 type Resp = #response_ident;
-                type Fut<'a> = #response_fut_ident<'a, S>;
+                type Fut<'a> where S: 'a = impl core::future::Future<Output = #response_ident> + 'a;
 
                 fn serve<'a>(&'a self, ctx: &'a mut tarpc::context::Context, req: #request_ident) -> Self::Fut<'a> {
-                    match req {
-                        #(
-                            #request_ident::#camel_case_idents{ #( #arg_pats ),* } => {
-                                #response_fut_ident::#camel_case_idents(
-                                    #service_ident::#method_idents(
-                                        &self.service, ctx, #( #arg_pats ),*
+                    async move {
+                        match req {
+                            #(
+                                #request_ident::#camel_case_idents{ #( #arg_pats ),* } => {
+                                    #response_ident::#camel_case_idents(
+                                        #service_ident::#method_idents(
+                                            &self.service, ctx, #( #arg_pats ),*
+                                        ).await
                                     )
-                                )
-                            }
-                        )*
+                                }
+                            )*
+                        }
                     }
                 }
             }
@@ -588,74 +580,6 @@ impl<'a> ServiceGenerator<'a> {
             #derive_serialize
             #vis enum #response_ident {
                 #( #camel_case_idents(#return_types) ),*
-            }
-        }
-    }
-
-    fn enum_response_future(&self) -> TokenStream2 {
-        let &Self {
-            vis,
-            service_ident,
-            response_fut_ident,
-            camel_case_idents,
-            future_types,
-            ..
-        } = self;
-
-        quote! {
-            /// A future resolving to a server response.
-            #vis enum #response_fut_ident<'a, S: #service_ident> {
-                #( #camel_case_idents(<S as #service_ident>::#future_types<'a>), )*
-                __Unreachable(&'a ()),
-            }
-        }
-    }
-
-    fn impl_debug_for_response_future(&self) -> TokenStream2 {
-        let &Self {
-            service_ident,
-            response_fut_ident,
-            response_fut_name,
-            ..
-        } = self;
-
-        quote! {
-            impl<S: #service_ident> std::fmt::Debug for #response_fut_ident<'_, S> {
-                fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-                    fmt.debug_struct(#response_fut_name).finish()
-                }
-            }
-        }
-    }
-
-    fn impl_future_for_response_future(&self) -> TokenStream2 {
-        let &Self {
-            service_ident,
-            response_fut_ident,
-            response_ident,
-            camel_case_idents,
-            ..
-        } = self;
-
-        quote! {
-            impl<S: #service_ident> std::future::Future for #response_fut_ident<'_, S> {
-                type Output = #response_ident;
-
-                fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>)
-                    -> std::task::Poll<#response_ident>
-                {
-                    unsafe {
-                        match std::pin::Pin::get_unchecked_mut(self) {
-                            #(
-                                #response_fut_ident::#camel_case_idents(resp) =>
-                                    std::pin::Pin::new_unchecked(resp)
-                                        .poll(cx)
-                                        .map(#response_ident::#camel_case_idents),
-                            )*
-                            _ => unreachable!(),
-                        }
-                    }
-                }
             }
         }
     }
@@ -723,6 +647,17 @@ impl<'a> ServiceGenerator<'a> {
                     }
                 }
 
+                #vis fn with_defaults<T>(transport: T)
+                    -> tarpc::client::NewClient<
+                        Self,
+                        tarpc::client::channel::RequestDispatch<#request_ident, #response_ident, T>
+                    >
+                where
+                    T: tarpc::Transport<tarpc::ClientMessage<#request_ident>, tarpc::Response<#response_ident>>
+                {
+                    Self::new(tarpc::client::Config::default(), transport)
+                }
+
             }
         }
     }
@@ -774,9 +709,6 @@ impl<'a> ToTokens for ServiceGenerator<'a> {
             self.impl_serve_for_server(),
             self.enum_request(),
             self.enum_response(),
-            self.enum_response_future(),
-            self.impl_debug_for_response_future(),
-            self.impl_future_for_response_future(),
             self.struct_client(),
             self.impl_from_for_client(),
             self.impl_client_new(),
