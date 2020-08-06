@@ -65,6 +65,27 @@ impl Context {
             parent_id: None,
         }
     }
+
+    /// Constructs a new context that contains a child span of the span of `self`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tarpc::trace::Context;
+    ///
+    /// let ctx = Context::new_root();
+    /// let child_ctx = ctx.new_child();
+    ///
+    /// assert_eq!(child_ctx.trace_id, ctx.trace_id);
+    /// assert_eq!(child_ctx.parent_id, Some(ctx.span_id));
+    /// ```
+    pub fn new_child(&self) -> Self {
+        Self {
+            trace_id: self.trace_id,
+            span_id: SpanId::random(&mut rand::thread_rng()),
+            parent_id: Some(self.span_id),
+        }
+    }
 }
 
 impl TraceId {
