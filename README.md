@@ -113,7 +113,7 @@ implement it for our Server struct.
 struct HelloServer;
 
 impl World for HelloServer {
-    async fn hello(&self, _: &mut context::Context, name: String) -> String {
+    async fn hello(&mut self, _: &mut context::Context, name: String) -> String {
         format!("Hello, {}!", name)
     }
 }

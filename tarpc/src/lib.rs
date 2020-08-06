@@ -283,12 +283,13 @@ pub use tarpc_plugins::service;
 /// }
 ///
 /// impl World for HelloServer {
-///     type HelloFut<'a> = Pin<Box<dyn Future<Output = String> + Send + 'a>>;
+///     // Marker traits are implicitly leaked when applicable.
+///     type HelloFut<'a> = impl Future<Output = String> + 'a;
 ///
 ///     fn hello<'a>(&'a mut self, _: &'a mut context::Context, name: String) -> Self::HelloFut<'a> {
-///         Box::pin(async move {
+///         async move {
 ///             format!("Hello, {}! You are connected from {:?}.", name, self.0)
-///         })
+///         }
 ///     }
 /// }
 /// ```
