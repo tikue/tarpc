@@ -27,7 +27,7 @@ struct HelloServer(SocketAddr);
 
 #[tarpc::server]
 impl World for HelloServer {
-    async fn hello(self, _: &mut context::Context, name: String) -> String {
+    async fn hello(&self, _: &mut context::Context, name: String) -> String {
         format!("Hello, {}! You are connected from {:?}.", name, self.0)
     }
 }
@@ -72,7 +72,7 @@ async fn main() -> io::Result<()> {
         // the generated World trait.
         .map(|channel| {
             let server = HelloServer(channel.as_ref().as_ref().peer_addr().unwrap());
-            channel.respond_with(server.serve()).execute()
+            channel.requests().execute(server.serve())
         })
         // Max 10 channels.
         .buffer_unordered(10)

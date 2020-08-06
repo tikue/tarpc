@@ -12,7 +12,6 @@ use crate::{
 };
 use fnv::FnvHashMap;
 use futures::{
-    channel::mpsc,
     future::{AbortHandle, AbortRegistration, Abortable},
     prelude::*,
     ready,
@@ -114,7 +113,7 @@ pub trait Serve<Req>: Sized + Clone {
     type Fut<'a>: Future<Output = Self::Resp> + Send where Self: 'a;
 
     /// Responds to a single request.
-    fn serve(self, ctx: &mut context::Context, req: Req) -> Self::Fut<'_>;
+    fn serve<'a>(&'a self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a>;
 }
 
 /// A utility trait enabling a stream to fluently chain a request handler.
@@ -267,17 +266,16 @@ where
 
     /// Respond to requests coming over the channel with `f`. Returns a future that drives the
     /// responses and resolves when the connection is closed.
-    fn respond_with<S>(self, server: S) -> ClientHandler<Self, S>
+    fn requests(self) -> ClientHandler<Self>
     where
-        S: Serve<Self::Req, Resp = Self::Resp>,
         Self: Sized,
     {
-        let (responses_tx, responses) = mpsc::channel(self.config().pending_response_buffer);
+        let (responses_tx, responses) =
+            async_channel::bounded(self.config().pending_response_buffer);
         let responses = responses.fuse();
 
         ClientHandler {
             channel: self,
-            server,
             pending_responses: responses,
             responses_tx,
         }
@@ -376,7 +374,7 @@ where
 /// A running handler serving all requests coming over a channel.
 #[pin_project]
 #[derive(Debug)]
-pub struct ClientHandler<C, S>
+pub struct ClientHandler<C>
 where
     C: Channel,
 {
@@ -384,18 +382,15 @@ where
     channel: C,
     /// Responses waiting to be written to the wire.
     #[pin]
-    pending_responses: Fuse<mpsc::Receiver<Response<C::Resp>>>,
+    pending_responses: Fuse<async_channel::Receiver<Response<C::Resp>>>,
     /// Handed out to request handlers to fan in responses.
     #[pin]
-    responses_tx: mpsc::Sender<Response<C::Resp>>,
-    /// Server
-    server: S,
+    responses_tx: async_channel::Sender<Response<C::Resp>>,
 }
 
-impl<C, S> ClientHandler<C, S>
+impl<C> ClientHandler<C>
 where
     C: Channel,
-    S: Serve<C::Req, Resp = C::Resp>,
 {
     /// Returns the inner channel over which messages are sent and received.
     pub fn channel_pin_mut<'a>(self: &'a mut Pin<&mut Self>) -> Pin<&'a mut C> {
@@ -405,13 +400,12 @@ where
     fn pump_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> PollIo<ResponseHandler<C::Req, C::Resp, S>> {
+    ) -> PollIo<ResponseHandler<C::Req, C::Resp>> {
         match ready!(self.channel_pin_mut().poll_next(cx)?) {
             Some(request) => {
                 let abort_registration = self.channel_pin_mut().start_request(request.id);
                 Poll::Ready(Some(Ok(ResponseHandler {
                     request,
-                    serve: self.server.clone(),
                     response_tx: self.responses_tx.clone(),
                     abort_registration,
                 })))
@@ -477,45 +471,43 @@ where
 
 /// Executes the handling of a single request.
 #[derive(Debug)]
-pub struct ResponseHandler<Req, Res, S> {
+pub struct ResponseHandler<Req, Res> {
     request: Request<Req>,
-    serve: S,
-    response_tx: mpsc::Sender<Response<Res>>,
+    response_tx: async_channel::Sender<Response<Res>>,
     abort_registration: AbortRegistration,
 }
 
-impl<Req, Res, S> ResponseHandler<Req, Res, S>
-where
-    S: Serve<Req, Resp = Res>,
-{
+impl<Req, Res> ResponseHandler<Req, Res> {
     /// Runs until response completion.
-    pub fn execute(self) -> impl Future<Output = ()> {
+    pub fn execute<'a, S>(self, serve: &'a S) -> impl Future<Output = ()> + 'a
+    where
+        S: Serve<Req, Resp = Res>,
+        Req: 'a,
+        Res: 'a,
+    {
         let Self {
             abort_registration,
             request,
-            mut response_tx,
-            serve,
+            response_tx,
         } = self;
-        let trace_id = *request.context.trace_id();
-        let deadline = request.context.deadline;
-        let timeout = deadline.time_until();
-        trace!(
-            "[{}] Handling request with deadline {} (timeout {:?}).",
-            trace_id,
-            format_rfc3339(deadline),
-            timeout,
-        );
         Abortable::new(
             async move {
+                let trace_id = *request.context.trace_id();
+                let deadline = request.context.deadline;
+                let timeout = deadline.time_until();
+                trace!(
+                    "[{}] Handling request with deadline {} (timeout {:?}).",
+                    trace_id,
+                    format_rfc3339(deadline),
+                    timeout,
+                );
                 let Request {
                     mut context,
                     message,
                     id: request_id,
                 } = request;
-                let result = tokio::time::timeout(timeout, async {
-                    serve.serve(&mut context, message).await
-                })
-                .await;
+                let result =
+                    tokio::time::timeout(timeout, serve.serve(&mut context, message)).await;
                 let response = Response {
                     context,
                     request_id,
@@ -547,12 +539,11 @@ where
     }
 }
 
-impl<C, S> Stream for ClientHandler<C, S>
+impl<C> Stream for ClientHandler<C>
 where
     C: Channel,
-    S: Serve<C::Req, Resp = C::Resp>,
 {
-    type Item = io::Result<ResponseHandler<C::Req, C::Resp, S>>;
+    type Item = io::Result<ResponseHandler<C::Req, C::Resp>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
@@ -580,24 +571,37 @@ where
 
 // Send + 'static execution helper methods.
 
-impl<C, S> ClientHandler<C, S>
+impl<C> ClientHandler<C>
 where
     C: Channel + 'static,
     C::Req: Send + 'static,
     C::Resp: Send + 'static,
-    S: Serve<C::Req, Resp = C::Resp> + Send + 'static,
 {
     /// Runs the client handler until completion by [spawning](tokio::spawn) each
     /// request handler onto the default executor.
     #[cfg(feature = "tokio1")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
-    pub fn execute(self) -> impl Future<Output = ()> {
-        self.try_for_each(|resp| async {
-            tokio::spawn(resp.execute());
-            Ok(())
-        })
-        .map_ok(|()| log::info!("ClientHandler finished."))
-        .unwrap_or_else(|e| log::info!("ClientHandler errored out: {}", e))
+    pub async fn execute<S>(self, serve: S)
+    where
+        S: Serve<C::Req, Resp = C::Resp> + Send + Sync + 'static,
+    {
+        let me = self;
+        futures::pin_mut!(me);
+        while let Some(response_handler) = me.next().await {
+            match response_handler {
+                Ok(resp) => {
+                    let server = serve.clone();
+                    tokio::spawn(async move {
+                        resp.execute(&server).await;
+                    });
+                }
+                Err(e) => {
+                    log::info!("ClientHandler errored out: {}", e);
+                    return;
+                }
+            }
+        }
+        log::info!("ClientHandler finished.");
     }
 }
 
@@ -620,7 +624,7 @@ where
     C: Channel + Send + 'static,
     C::Req: Send + 'static,
     C::Resp: Send + 'static,
-    Se: Serve<C::Req, Resp = C::Resp> + Send + 'static + Clone,
+    Se: Serve<C::Req, Resp = C::Resp> + Send + Sync + 'static + Clone,
 {
     type Output = ();
 
@@ -628,8 +632,8 @@ where
         while let Some(channel) = ready!(self.as_mut().project().incoming.poll_next(cx)) {
             tokio::spawn(
                 channel
-                    .respond_with(self.as_mut().project().server.clone())
-                    .execute(),
+                    .requests()
+                    .execute(self.as_mut().project().server.clone()),
             );
         }
         log::info!("Server shutting down.");
