@@ -5,7 +5,7 @@
 // https://opensource.org/licenses/MIT.
 
 #![allow(incomplete_features)]
-#![feature(generic_associated_types)]
+#![feature(generic_associated_types, type_alias_impl_trait)]
 
 use crate::{add::Add as AddService, double::Double as DoubleService};
 use futures::{future, prelude::*};

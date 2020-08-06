@@ -75,7 +75,7 @@
 //!
 //! ```rust
 //! # #![allow(incomplete_features)]
-//! # #![feature(generic_associated_types)]
+//! # #![feature(generic_associated_types, type_alias_impl_trait)]
 //! # extern crate futures;
 //!
 //! use futures::{
@@ -102,7 +102,7 @@
 //!
 //! ```rust
 //! # #![allow(incomplete_features)]
-//! # #![feature(generic_associated_types)]
+//! # #![feature(generic_associated_types, type_alias_impl_trait)]
 //! # extern crate futures;
 //! # use futures::{
 //! #     future::{self, Ready},
@@ -140,7 +140,7 @@
 //!
 //! ```rust
 //! # #![allow(incomplete_features)]
-//! # #![feature(generic_associated_types)]
+//! # #![feature(generic_associated_types, type_alias_impl_trait)]
 //! # extern crate futures;
 //! # use futures::{
 //! #     future::{self, Ready},
@@ -221,7 +221,7 @@ pub use rpc::*;
 ///
 /// ```rust
 /// # #![allow(incomplete_features)]
-/// # #![feature(generic_associated_types)]
+/// # #![feature(generic_associated_types, type_alias_impl_trait)]
 /// #[tarpc::service]
 /// trait Service {
 ///     /// Say hello
@@ -249,7 +249,7 @@ pub use tarpc_plugins::service;
 ///
 /// ```rust
 /// # #![allow(incomplete_features)]
-/// # #![feature(generic_associated_types)]
+/// # #![feature(generic_associated_types, type_alias_impl_trait)]
 /// # use tarpc::context;
 /// # use std::net::SocketAddr;
 /// #[tarpc::service]
@@ -272,7 +272,7 @@ pub use tarpc_plugins::service;
 ///
 /// ```rust
 /// # #![allow(incomplete_features)]
-/// # #![feature(generic_associated_types)]
+/// # #![feature(generic_associated_types, type_alias_impl_trait)]
 /// # use tarpc::context;
 /// # use std::pin::Pin;
 /// # use futures::Future;

@@ -1,22 +1,27 @@
 #![allow(incomplete_features)]
-#![feature(generic_associated_types)]
+#![feature(generic_associated_types, type_alias_impl_trait)]
 
 use assert_matches::assert_matches;
 use futures::{
     future::{join_all, ready},
     prelude::*,
 };
-use std::io;
+use static_assertions::_core::cell::RefCell;
+use std::{
+    collections::HashMap,
+    io,
+    time::{Duration, SystemTime},
+};
 use tarpc::{
     client::{self},
     context, serde_transport,
     server::{self, BaseChannel, Channel, Handler},
     transport::channel,
 };
-use tokio::join;
+use tokio::{join, task};
 use tokio_serde::formats::Json;
 
-#[tarpc_plugins::service]
+#[tarpc::service]
 trait Service {
     async fn add(x: i32, y: i32) -> i32;
     async fn hey(name: String) -> String;
@@ -147,4 +152,95 @@ async fn concurrent_join_all() -> io::Result<()> {
     assert_matches!(responses[1], Ok(7));
 
     Ok(())
+}
+
+#[tarpc::service(derive_serde = false)]
+trait JustCancel {
+    async fn wait(key: String, started: async_channel::Sender<()>, done: async_channel::Sender<()>);
+    async fn status(key: String) -> Option<Status>;
+}
+
+#[derive(Debug)]
+enum Status {
+    Done,
+    NotDone,
+}
+
+struct JustCancelServer {
+    requests: RefCell<HashMap<String, Status>>,
+}
+
+#[tarpc::server]
+impl JustCancel for JustCancelServer {
+    async fn wait(
+        &self,
+        ctx: &mut context::Context,
+        key: String,
+        started: async_channel::Sender<()>,
+        _done: async_channel::Sender<()>,
+    ) {
+        self.requests
+            .borrow_mut()
+            .insert(key.clone(), Status::NotDone);
+        let _ = started.send(()).await;
+        tokio::time::delay_for(
+            ctx.deadline
+                .duration_since(SystemTime::now())
+                .unwrap_or_default()
+                - Duration::from_secs(2),
+        )
+        .await;
+        if let Some(b) = self.requests.borrow_mut().get_mut(&key) {
+            *b = Status::Done;
+        }
+        log::info!("requests: {:?}", self.requests);
+    }
+
+    async fn status(&self, _: &mut context::Context, key: String) -> Option<Status> {
+        self.requests.borrow_mut().remove(&key)
+    }
+}
+
+#[tokio::test(basic_scheduler)]
+async fn cancellation() -> io::Result<()> {
+    let _ = env_logger::try_init();
+    let local = task::LocalSet::new();
+    local
+        .run_until(async {
+            let (tx, rx) = channel::unbounded();
+            task::spawn_local(async move {
+                // Serve two requests, in order.
+                let server = JustCancelServer {
+                    requests: RefCell::new(HashMap::new()),
+                }
+                .serve();
+                BaseChannel::with_defaults(rx)
+                    .requests()
+                    .for_each_concurrent(None, |handler| handler.unwrap().execute(&server))
+                    .await;
+            });
+            let client = JustCancelClient::with_defaults(tx).spawn()?;
+
+            let (started, started_rx) = async_channel::unbounded();
+            let (done, done_rx) = async_channel::unbounded();
+
+            // Wait for the server to signal it has started processing the request, then immediately
+            // cancel the request.
+            tokio::select!(
+                _ = client.wait(context::current(), "key".into(), started, done) => {}
+                _ = started_rx.recv() => {}
+            );
+
+            // By waiting for the done signal, we know that the server finished handling the request,
+            // either successfully or (hopefully) via cancellation.
+            let _ = done_rx.recv().await;
+
+            assert_matches!(
+                client.status(context::current(), "key".into()).await,
+                Ok(Some(Status::NotDone))
+            );
+
+            Ok(())
+        })
+        .await
 }

@@ -34,7 +34,7 @@
 //! T11       |                                 |<--------------(OK) Publish------|
 
 #![allow(incomplete_features)]
-#![feature(generic_associated_types)]
+#![feature(generic_associated_types, type_alias_impl_trait)]
 
 use anyhow::{anyhow, Context};
 use futures::{

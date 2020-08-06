@@ -1,9 +1,7 @@
 #![allow(incomplete_features)]
-#![feature(generic_associated_types)]
+#![feature(generic_associated_types, type_alias_impl_trait)]
 
-use assert_type_eq::assert_type_eq;
 use futures::Future;
-use std::pin::Pin;
 use tarpc::context;
 
 // these need to be out here rather than inside the function so that the
@@ -35,25 +33,9 @@ fn type_generation_works() {
         async fn baz<'a>(&'a self, _: &'a mut context::Context) {}
     }
 
-    // the assert_type_eq macro can only be used once per block.
-    {
-        assert_type_eq!(
-            <() as Foo>::TwoPartFut<'_>,
-            Pin<Box<dyn Future<Output = (String, i32)> + Send>>
-        );
-    }
-    {
-        assert_type_eq!(
-            <() as Foo>::BarFut<'_>,
-            Pin<Box<dyn Future<Output = String> + Send>>
-        );
-    }
-    {
-        assert_type_eq!(
-            <() as Foo>::BazFut<'_>,
-            Pin<Box<dyn Future<Output = ()> + Send>>
-        );
-    }
+    static_assertions::assert_impl_all!(<() as Foo>::TwoPartFut<'_>: Future<Output = (String, i32)>, Send);
+    static_assertions::assert_impl_all!(<() as Foo>::BarFut<'_>: Future<Output = String>, Send);
+    static_assertions::assert_impl_all!(<() as Foo>::BazFut<'_>: Future<Output = ()>, Send);
 }
 
 #[allow(non_camel_case_types)]

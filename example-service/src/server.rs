@@ -5,7 +5,7 @@
 // https://opensource.org/licenses/MIT.
 
 #![allow(incomplete_features)]
-#![feature(generic_associated_types)]
+#![feature(generic_associated_types, type_alias_impl_trait)]
 
 use clap::{App, Arg};
 use futures::{future, prelude::*};
