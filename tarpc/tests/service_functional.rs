@@ -32,11 +32,11 @@ struct Server;
 
 #[tarpc::server]
 impl Service for Server {
-    async fn add(&self, _: &mut context::Context, x: i32, y: i32) -> i32 {
+    async fn add(&mut self, _: &mut context::Context, x: i32, y: i32) -> i32 {
         x + y
     }
 
-    async fn hey(&self, _: &mut context::Context, name: String) -> String {
+    async fn hey(&mut self, _: &mut context::Context, name: String) -> String {
         format!("Hey, {}.", name)
     }
 }
@@ -170,34 +170,41 @@ struct JustCancelServer {
     requests: RefCell<HashMap<String, Status>>,
 }
 
-#[tarpc::server]
-impl JustCancel for JustCancelServer {
-    async fn wait(
-        &self,
-        ctx: &mut context::Context,
+impl<'b> JustCancel for &'b JustCancelServer {
+    #[rustfmt::skip]
+    type WaitFut<'a> where 'b: 'a = impl Future<Output = ()> + 'a;
+
+    fn wait<'a>(
+        &'a mut self,
+        ctx: &'a mut context::Context,
         key: String,
         started: async_channel::Sender<()>,
         _done: async_channel::Sender<()>,
-    ) {
-        self.requests
-            .borrow_mut()
-            .insert(key.clone(), Status::NotDone);
-        let _ = started.send(()).await;
-        tokio::time::delay_for(
-            ctx.deadline
-                .duration_since(SystemTime::now())
-                .unwrap_or_default()
-                - Duration::from_secs(2),
-        )
-        .await;
-        if let Some(b) = self.requests.borrow_mut().get_mut(&key) {
-            *b = Status::Done;
+    ) -> Self::WaitFut<'a> {
+        async move {
+            self.requests
+                .borrow_mut()
+                .insert(key.clone(), Status::NotDone);
+            let _ = started.send(()).await;
+            tokio::time::delay_for(
+                ctx.deadline
+                    .duration_since(SystemTime::now())
+                    .unwrap_or_default()
+                    - Duration::from_secs(2),
+            )
+            .await;
+            if let Some(b) = self.requests.borrow_mut().get_mut(&key) {
+                *b = Status::Done;
+            }
+            log::info!("requests: {:?}", self.requests);
         }
-        log::info!("requests: {:?}", self.requests);
     }
 
-    async fn status(&self, _: &mut context::Context, key: String) -> Option<Status> {
-        self.requests.borrow_mut().remove(&key)
+    #[rustfmt::skip]
+    type StatusFut<'a> where 'b: 'a = impl Future<Output = Option<Status>> + 'a;
+
+    fn status<'a>(&'a mut self, _: &'a mut context::Context, key: String) -> Self::StatusFut<'a> {
+        async move { self.requests.borrow_mut().remove(&key) }
     }
 }
 
@@ -210,13 +217,14 @@ async fn cancellation() -> io::Result<()> {
             let (tx, rx) = channel::unbounded();
             task::spawn_local(async move {
                 // Serve two requests, in order.
-                let server = JustCancelServer {
+                let server = &JustCancelServer {
                     requests: RefCell::new(HashMap::new()),
-                }
-                .serve();
+                };
                 BaseChannel::with_defaults(rx)
                     .requests()
-                    .for_each_concurrent(None, |handler| handler.unwrap().execute(&server))
+                    .for_each_concurrent(None, |handler| async {
+                        handler.unwrap().execute(&mut server.serve()).await
+                    })
                     .await;
             });
             let client = JustCancelClient::with_defaults(tx).spawn()?;

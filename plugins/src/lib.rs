@@ -474,7 +474,7 @@ impl<'a> ServiceGenerator<'a> {
                         type #future_type<'a>: std::future::Future<Output = #output> where Self: 'a;
 
                         #( #attrs )*
-                        fn #ident<'a>(&'a self, context: &'a mut tarpc::context::Context, #( #args ),*) -> Self::#future_type<'a>;
+                        fn #ident<'a>(&'a mut self, context: &'a mut tarpc::context::Context, #( #args ),*) -> Self::#future_type<'a>;
                     }
                 },
             );
@@ -525,14 +525,14 @@ impl<'a> ServiceGenerator<'a> {
                 type Resp = #response_ident;
                 type Fut<'a> where S: 'a = impl core::future::Future<Output = #response_ident> + 'a;
 
-                fn serve<'a>(&'a self, ctx: &'a mut tarpc::context::Context, req: #request_ident) -> Self::Fut<'a> {
+                fn serve<'a>(&'a mut self, ctx: &'a mut tarpc::context::Context, req: #request_ident) -> Self::Fut<'a> {
                     async move {
                         match req {
                             #(
                                 #request_ident::#camel_case_idents{ #( #arg_pats ),* } => {
                                     #response_ident::#camel_case_idents(
                                         #service_ident::#method_idents(
-                                            &self.service, ctx, #( #arg_pats ),*
+                                            &mut self.service, ctx, #( #arg_pats ),*
                                         ).await
                                     )
                                 }
