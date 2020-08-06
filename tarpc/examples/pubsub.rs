@@ -82,11 +82,11 @@ struct Subscriber {
 
 #[tarpc::server]
 impl subscriber::Subscriber for Subscriber {
-    async fn topics(self, _: &mut context::Context) -> Vec<String> {
+    async fn topics(&self, _: &mut context::Context) -> Vec<String> {
         self.topics.clone()
     }
 
-    async fn receive(self, _: &mut context::Context, topic: String, message: String) {
+    async fn receive(&self, _: &mut context::Context, topic: String, message: String) {
         info!(
             "[{}] received message on topic '{}': {}",
             self.local_addr, topic, message
@@ -109,11 +109,16 @@ impl Subscriber {
     ) -> anyhow::Result<SubscriberHandle> {
         let publisher = tcp::connect(publisher_addr, Json::default()).await?;
         let local_addr = publisher.local_addr()?;
-        let mut handler = server::BaseChannel::with_defaults(publisher)
-            .respond_with(Subscriber { local_addr, topics }.serve());
+        let mut handler = server::BaseChannel::with_defaults(publisher).requests();
+        let subscriber = Subscriber { local_addr, topics }.serve();
         // The first request is for the topics being subscriibed to.
         match handler.next().await {
-            Some(init_topics) => init_topics.context("Initializing topics")?.execute().await,
+            Some(init_topics) => {
+                init_topics
+                    .context("Initializing topics")?
+                    .execute(&subscriber)
+                    .await
+            }
             None => {
                 return Err(anyhow!(
                     "[{}] Server never initialized the subscriber.",
@@ -121,7 +126,7 @@ impl Subscriber {
                 ))
             }
         };
-        let (handler, abort_handle) = future::abortable(handler.execute());
+        let (handler, abort_handle) = future::abortable(handler.execute(subscriber));
         tokio::spawn(async move {
             match handler.await {
                 Ok(()) | Err(future::Aborted) => info!("[{}] subscriber shutdown.", local_addr),
@@ -166,8 +171,8 @@ impl Publisher {
             info!("[{}] publisher connected.", publisher.peer_addr().unwrap());
 
             server::BaseChannel::with_defaults(publisher)
-                .respond_with(self.serve())
-                .execute()
+                .requests()
+                .execute(self.serve())
                 .await
         });
 
@@ -208,7 +213,7 @@ impl Publisher {
     async fn initialize_subscription(
         &mut self,
         subscriber_addr: SocketAddr,
-        mut subscriber: subscriber::SubscriberClient,
+        subscriber: subscriber::SubscriberClient,
     ) {
         // Populate the topics
         if let Ok(topics) = subscriber.topics(context::current()).await {
@@ -266,7 +271,7 @@ impl Publisher {
 
 #[tarpc::server]
 impl publisher::Publisher for Publisher {
-    async fn publish(self, _: &mut context::Context, topic: String, message: String) {
+    async fn publish(&self, _: &mut context::Context, topic: String, message: String) {
         info!("received message to publish.");
         let mut subscribers = match self.subscriptions.read().unwrap().get(&topic) {
             None => return,
@@ -310,7 +315,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    let mut publisher = publisher::PublisherClient::new(
+    let publisher = publisher::PublisherClient::new(
         client::Config::default(),
         tcp::connect(addrs.publisher, Json::default()).await?,
     )

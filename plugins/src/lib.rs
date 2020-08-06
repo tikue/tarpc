@@ -23,7 +23,7 @@ use syn::{
     spanned::Spanned,
     token::Comma,
     Attribute, FnArg, Ident, ImplItem, ImplItemMethod, ImplItemType, ItemImpl, Lit, LitBool,
-    MetaNameValue, Pat, PatType, ReturnType, Token, Type, Visibility,
+    MetaNameValue, Pat, PatType, Receiver, ReturnType, Token, Type, Visibility,
 };
 
 /// Accumulates multiple errors into a result.
@@ -305,10 +305,34 @@ fn transform_method(method: &mut ImplItemMethod) -> ImplItemType {
     let fut_name = associated_type_for_rpc(method);
     let fut_name_ident = Ident::new(&fut_name, method.sig.ident.span());
 
+    method.sig.generics = parse_quote! { <'a> };
+
+    let mut inputs = method.sig.inputs.iter_mut();
+    if let Some(arg) = inputs.next() {
+        if let FnArg::Receiver(Receiver {
+            reference: Some(ref mut reference),
+            ..
+        }) = arg
+        {
+            if reference.1.is_none() {
+                reference.1 = Some(parse_quote! { 'a });
+            }
+        }
+    }
+    if let Some(arg) = inputs.next() {
+        if let FnArg::Typed(PatType { ty, .. }) = arg {
+            if let &mut Type::Reference(ref mut reference) = ty.as_mut() {
+                if reference.lifetime.is_none() {
+                    reference.lifetime = parse_quote! { 'a };
+                }
+            }
+        }
+    }
+
     // generate the updated return signature.
     method.sig.output = parse_quote! {
         -> ::core::pin::Pin<Box<
-                dyn ::core::future::Future<Output = #ret> + Send + '_
+                dyn ::core::future::Future<Output = #ret> + Send + 'a
             >>
     };
 
@@ -459,7 +483,7 @@ impl<'a> ServiceGenerator<'a> {
                         type #future_type<'a>: std::future::Future<Output = #output> + Send where Self: 'a;
 
                         #( #attrs )*
-                        fn #ident<'a>(self, context: &'a mut tarpc::context::Context, #( #args ),*) -> Self::#future_type<'a>;
+                        fn #ident<'a>(&'a self, context: &'a mut tarpc::context::Context, #( #args ),*) -> Self::#future_type<'a>;
                     }
                 },
             );
@@ -511,13 +535,13 @@ impl<'a> ServiceGenerator<'a> {
                 type Resp = #response_ident;
                 type Fut<'a> = #response_fut_ident<'a, S>;
 
-                fn serve(self, ctx: &mut tarpc::context::Context, req: #request_ident) -> Self::Fut<'_> {
+                fn serve<'a>(&'a self, ctx: &'a mut tarpc::context::Context, req: #request_ident) -> Self::Fut<'a> {
                     match req {
                         #(
                             #request_ident::#camel_case_idents{ #( #arg_pats ),* } => {
                                 #response_fut_ident::#camel_case_idents(
                                     #service_ident::#method_idents(
-                                        self.service, ctx, #( #arg_pats ),*
+                                        &self.service, ctx, #( #arg_pats ),*
                                     )
                                 )
                             }
@@ -725,10 +749,10 @@ impl<'a> ServiceGenerator<'a> {
                 #(
                     #[allow(unused)]
                     #( #method_attrs )*
-                    #vis fn #method_idents(&mut self, ctx: tarpc::context::Context, #( #args ),*)
+                    #vis fn #method_idents(&self, ctx: tarpc::context::Context, #( #args ),*)
                         -> impl std::future::Future<Output = std::io::Result<#return_types>> + '_ {
                         let request = #request_ident::#camel_case_idents { #( #arg_pats ),* };
-                        let resp = tarpc::Client::call(&mut self.0, ctx, request);
+                        let resp = self.0.call(ctx, request);
                         async move {
                             match resp.await? {
                                 #response_ident::#camel_case_idents(msg) => std::result::Result::Ok(msg),

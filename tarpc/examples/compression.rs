@@ -128,7 +128,7 @@ struct HelloServer;
 
 #[tarpc::server]
 impl World for HelloServer {
-    async fn hello(self, ctx: &mut context::Context, name: String) -> String {
+    async fn hello(&self, ctx: &mut context::Context, name: String) -> String {
         let serialized_size = ctx
             .extensions
             .get::<SerializedSize>()
@@ -155,14 +155,14 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         let transport = incoming.next().await.unwrap().unwrap();
         BaseChannel::with_defaults(add_compression(transport))
-            .respond_with(HelloServer.serve())
-            .execute()
+            .requests()
+            .execute(HelloServer.serve())
             .await;
     });
 
     let transport = tcp::connect(addr, Bincode::default()).await?;
     let channel = client::new(client::Config::default(), add_compression(transport)).spawn()?;
-    let mut client = WorldClient::from(channel.with_context(|ctx| {
+    let client = WorldClient::from(channel.with_context(|ctx| {
         ctx.extensions.insert(CompressionAlgorithm::Deflate);
     }));
 
