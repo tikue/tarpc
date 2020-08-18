@@ -109,7 +109,7 @@ impl Subscriber {
     ) -> anyhow::Result<SubscriberHandle> {
         let publisher = tcp::connect(publisher_addr, Json::default).await?;
         let local_addr = publisher.local_addr()?;
-        let mut requests = server::BaseChannel::with_defaults(publisher).requests();
+        let mut requests = server::channel::new(publisher).requests();
         let mut subscriber = Subscriber { local_addr, topics }.serve();
         // The first request is for the topics being subscriibed to.
         match requests.next().await {
@@ -170,9 +170,7 @@ impl Publisher {
             let publisher = connecting_publishers.next().await.unwrap().unwrap();
             info!("[{}] publisher connected.", publisher.peer_addr().unwrap());
 
-            server::BaseChannel::with_defaults(publisher)
-                .execute(self.serve())
-                .await
+            server::channel::new(publisher).execute(self.serve()).await
         });
 
         Ok(publisher_addrs)

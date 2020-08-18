@@ -30,7 +30,7 @@ pub mod server;
 pub mod transport;
 pub(crate) mod util;
 
-pub use crate::{client::Client, server::Server, trace, transport::sealed::Transport};
+pub use {client::Client, transport::sealed::Transport};
 
 use anyhow::Context as _;
 use std::{fmt::Display, io, task::Poll, time::SystemTime};

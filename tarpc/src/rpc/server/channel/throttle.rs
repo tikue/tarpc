@@ -4,8 +4,10 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
-use super::{Channel, Config};
-use crate::{Response, ServerError};
+use crate::{
+    server::{channel::Config, Channel},
+    Response, ServerError,
+};
 use futures::{future::AbortRegistration, prelude::*, ready};
 use log::debug;
 use pin_project::pin_project;
@@ -128,6 +130,10 @@ where
         self.inner.config()
     }
 
+    fn config_mut(&mut self) -> &mut Config {
+        self.inner.config_mut()
+    }
+
     fn in_flight_requests(&self) -> usize {
         self.inner.in_flight_requests()
     }
@@ -182,7 +188,7 @@ where
 
 #[cfg(test)]
 use {
-    super::testing::{self, FakeChannel, PollExt},
+    crate::server::testing::{self, FakeChannel, PollExt},
     crate::Request,
     pin_utils::pin_mut,
     std::marker::PhantomData,
@@ -303,6 +309,9 @@ fn throttler_poll_next_throttled_sink_not_ready() {
         type Req = Req;
         type Resp = Resp;
         fn config(&self) -> &Config {
+            unimplemented!()
+        }
+        fn config_mut(&mut self) -> &mut Config {
             unimplemented!()
         }
         fn in_flight_requests(&self) -> usize {

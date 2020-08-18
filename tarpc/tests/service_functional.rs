@@ -15,7 +15,7 @@ use std::{
 use tarpc::{
     client::{self},
     context, serde_transport,
-    server::{self, BaseChannel, Channel, Handler},
+    server::{channel::BaseChannel, Channel, Incoming},
     transport::channel,
 };
 use tokio::{join, task};
@@ -47,7 +47,7 @@ async fn sequential() -> io::Result<()> {
 
     let (tx, rx) = channel::unbounded();
 
-    tokio::spawn(BaseChannel::new(server::Config::default(), rx).execute(Server.serve()));
+    tokio::spawn(BaseChannel::new(rx).execute(Server.serve()));
 
     let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
 
@@ -67,8 +67,7 @@ async fn serde() -> io::Result<()> {
     let transport = serde_transport::tcp::listen("localhost:56789", Json::default).await?;
     let addr = transport.local_addr();
     tokio::spawn(
-        tarpc::Server::default()
-            .incoming(transport.take(1).filter_map(|r| async { r.ok() }))
+        tarpc::server::incoming(transport.take(1).filter_map(|r| async { r.ok() }))
             .execute(Server.serve()),
     );
 
@@ -89,11 +88,7 @@ async fn concurrent() -> io::Result<()> {
     let _ = env_logger::try_init();
 
     let (tx, rx) = channel::unbounded();
-    tokio::spawn(
-        tarpc::Server::default()
-            .incoming(stream::once(ready(rx)))
-            .execute(Server.serve()),
-    );
+    tokio::spawn(tarpc::server::incoming(stream::once(ready(rx))).execute(Server.serve()));
 
     let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
 
@@ -113,11 +108,7 @@ async fn concurrent_join() -> io::Result<()> {
     let _ = env_logger::try_init();
 
     let (tx, rx) = channel::unbounded();
-    tokio::spawn(
-        tarpc::Server::default()
-            .incoming(stream::once(ready(rx)))
-            .execute(Server.serve()),
-    );
+    tokio::spawn(tarpc::server::incoming(stream::once(ready(rx))).execute(Server.serve()));
 
     let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
     let req1 = client.add(context::current(), 1, 2);
@@ -137,11 +128,7 @@ async fn concurrent_join_all() -> io::Result<()> {
     let _ = env_logger::try_init();
 
     let (tx, rx) = channel::unbounded();
-    tokio::spawn(
-        tarpc::Server::default()
-            .incoming(stream::once(ready(rx)))
-            .execute(Server.serve()),
-    );
+    tokio::spawn(tarpc::server::incoming(stream::once(ready(rx))).execute(Server.serve()));
 
     let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
     let req1 = client.add(context::current(), 1, 2);
@@ -228,7 +215,7 @@ async fn cancellation() -> io::Result<()> {
                 let server = &JustCancelServer {
                     requests: RefCell::new(HashMap::new()),
                 };
-                BaseChannel::with_defaults(rx)
+                BaseChannel::new(rx)
                     .requests()
                     .for_each_concurrent(None, |handler| async {
                         handler.unwrap().execute(&mut server.serve()).await

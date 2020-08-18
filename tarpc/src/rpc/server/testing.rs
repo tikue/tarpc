@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
-use crate::server::{Channel, Config};
+use crate::server::{channel::Config, Channel};
 use crate::{context, Request, Response};
 use fnv::FnvHashSet;
 use futures::{
@@ -90,6 +90,10 @@ where
         &self.config
     }
 
+    fn config_mut(&mut self) -> &mut Config {
+        &mut self.config
+    }
+
     fn in_flight_requests(&self) -> usize {
         self.in_flight_requests.len()
     }
@@ -119,7 +123,7 @@ impl FakeChannel<(), ()> {
         FakeChannel {
             stream: Default::default(),
             sink: Default::default(),
-            config: Default::default(),
+            config: Config::default(),
             in_flight_requests: Default::default(),
         }
     }

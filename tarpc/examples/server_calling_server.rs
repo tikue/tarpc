@@ -12,7 +12,7 @@ use futures::{future, prelude::*};
 use std::io;
 use tarpc::{
     client, context,
-    server::{Handler, Server},
+    server::{self, Incoming},
 };
 use tokio_serde::formats::Json;
 
@@ -65,10 +65,7 @@ async fn main() -> io::Result<()> {
         .await?
         .filter_map(|r| future::ready(r.ok()));
     let addr = add_listener.get_ref().local_addr();
-    let add_server = Server::default()
-        .incoming(add_listener)
-        .take(1)
-        .execute(AddServer.serve());
+    let add_server = server::incoming(add_listener.take(1)).execute(AddServer.serve());
     tokio::spawn(add_server);
 
     let to_add_server = tarpc::serde_transport::tcp::connect(addr, Json::default).await?;
@@ -78,9 +75,7 @@ async fn main() -> io::Result<()> {
         .await?
         .filter_map(|r| future::ready(r.ok()));
     let addr = double_listener.get_ref().local_addr();
-    let double_server = tarpc::Server::default()
-        .incoming(double_listener)
-        .take(1)
+    let double_server = tarpc::server::incoming(double_listener.take(1))
         .execute(DoubleServer { add_client }.serve());
     tokio::spawn(double_server);
 

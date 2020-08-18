@@ -11,7 +11,7 @@ use tarpc::{
     client::{self, Client},
     context::{self, HasContext},
     serde_transport::tcp,
-    server::{BaseChannel, Channel},
+    server::{self, Channel},
 };
 use tokio_serde::formats::Bincode;
 
@@ -154,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
     let addr = incoming.local_addr();
     tokio::spawn(async move {
         let transport = incoming.next().await.unwrap().unwrap();
-        BaseChannel::with_defaults(add_compression(transport))
+        server::channel::new(add_compression(transport))
             .execute(HelloServer.serve())
             .await;
     });

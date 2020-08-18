@@ -4,10 +4,7 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
-use crate::{
-    server::{self, Channel},
-    util::Compact,
-};
+use crate::{server::Channel, util::Compact};
 use fnv::FnvHashMap;
 use futures::{channel::mpsc, future::AbortRegistration, prelude::*, ready, stream::Fuse};
 use log::{debug, info, trace};
@@ -105,8 +102,12 @@ where
     type Req = C::Req;
     type Resp = C::Resp;
 
-    fn config(&self) -> &server::Config {
+    fn config(&self) -> &super::Config {
         self.inner.config()
+    }
+
+    fn config_mut(&mut self) -> &mut super::Config {
+        self.inner.config_mut()
     }
 
     fn in_flight_requests(&self) -> usize {
