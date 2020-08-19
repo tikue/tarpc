@@ -141,6 +141,37 @@ async fn concurrent_join_all() -> io::Result<()> {
     Ok(())
 }
 
+#[tokio::test(basic_scheduler)]
+async fn in_flight_request_cleanup() -> io::Result<()> {
+    use std::task::Poll;
+    let _ = env_logger::try_init();
+
+    let (tx, rx) = channel::unbounded();
+    let requests = tarpc::server::channel::new(rx).requests();
+    futures::pin_mut!(requests);
+    assert_eq!(requests.channel_pin_mut().in_flight_requests(), 0);
+
+    let client = ServiceClient::new(client::Config::default(), tx).spawn()?;
+    tokio::spawn(async move {
+        let _ = client.add(context::current(), 1, 2).await;
+    });
+
+    let next = requests.next().await.unwrap()?;
+    drop(next.execute(&mut Server.serve()));
+
+    assert_eq!(requests.channel_pin_mut().in_flight_requests(), 1);
+    // Drive Requests until it is pending. By that point, it should have cleaned up the in-flight
+    // requests.
+    loop {
+        if matches!(futures::poll!(requests.next()), Poll::Pending) {
+            break;
+        }
+    }
+    assert_eq!(requests.channel_pin_mut().in_flight_requests(), 0);
+
+    Ok(())
+}
+
 #[tarpc::service(derive_serde = false)]
 trait JustCancel {
     async fn wait(

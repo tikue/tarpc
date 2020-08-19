@@ -1,4 +1,5 @@
 use crate::{
+    context,
     server::{send, Serve},
     trace,
     util::Compact,
@@ -13,7 +14,7 @@ use futures::{
     stream::Fuse,
 };
 use humantime::format_rfc3339;
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use pin_project::pin_project;
 use std::{
     io,
@@ -40,8 +41,7 @@ pub use {
 /// 2. [Channel::requests] - This method is best for those who need direct access to individual
 ///    requests, or are not using `tokio`, or want control over [futures](Future) scheduling.
 ///    Users manually scheduling request executions should strive to let handler futures complete
-///    before dropping them, in order to ensure cleanup of all resources associated with the
-///    request. TODO: use a drop impl to clean up resources when futures are early-dropped.
+///    before dropping them, so that clients receive *some* response.
 /// 3. [Raw stream](<Channel as Stream>) - A user is free to manually handle requests produced by
 ///    Channel. If they do so, they should uphold the service contract:
 ///    1. All work being done as part of processing request `request_id` is aborted when
@@ -93,14 +93,16 @@ where
     where
         Self: Sized,
     {
-        let (responses_tx, responses) =
+        let (bounded_responses_tx, bounded_responses) =
             async_channel::bounded(self.config().pending_response_buffer);
-        let responses = responses.fuse();
+        let (unbounded_responses_tx, unbounded_responses) = async_channel::unbounded();
 
         Requests {
             channel: self,
-            pending_responses: responses,
-            responses_tx,
+            bounded_responses: bounded_responses.fuse(),
+            bounded_responses_tx,
+            unbounded_responses: unbounded_responses.fuse(),
+            unbounded_responses_tx,
         }
     }
 
@@ -196,6 +198,8 @@ where
         self.as_mut().project().in_flight_requests
     }
 
+    /// Cancels request with ID `request_id` such that no response will be sent to the Client.
+    /// This should only be used when the client has already cancelled the request.
     fn cancel_request(mut self: Pin<&mut Self>, trace_context: &trace::Context, request_id: u64) {
         // It's possible the request was already completed, so it's fine
         // if this is None.
@@ -321,12 +325,19 @@ where
 {
     #[pin]
     channel: C,
-    /// Responses waiting to be written to the wire.
+    /// A bounded stream of responses waiting to be written to the wire.
     #[pin]
-    pending_responses: Fuse<async_channel::Receiver<Response<C::Resp>>>,
+    bounded_responses: Fuse<async_channel::Receiver<Response<C::Resp>>>,
+    /// An unbounded stream of responses waiting to be written to the wire.
+    /// This stream is intended only for low-volume use.
+    #[pin]
+    unbounded_responses: Fuse<async_channel::Receiver<Response<C::Resp>>>,
     /// Handed out to request handlers to fan in responses.
     #[pin]
-    responses_tx: async_channel::Sender<Response<C::Resp>>,
+    bounded_responses_tx: async_channel::Sender<Response<C::Resp>>,
+    /// Requests where a response was never produced.
+    #[pin]
+    unbounded_responses_tx: async_channel::Sender<Response<C::Resp>>,
 }
 
 impl<C> Requests<C>
@@ -344,10 +355,16 @@ where
     ) -> PollIo<InFlightRequest<C::Req, C::Resp>> {
         match ready!(self.channel_pin_mut().poll_next(cx)?) {
             Some(request) => {
+                let response_guard = ResponseGuard {
+                    unbounded_response_tx: self.unbounded_responses_tx.clone(),
+                    // TODO: don't clone
+                    incomplete: Some((request.context.clone(), request.id)),
+                };
                 let abort_registration = self.channel_pin_mut().start_request(request.id);
                 Poll::Ready(Some(Ok(InFlightRequest {
                     request,
-                    response_tx: self.responses_tx.clone(),
+                    bounded_response_tx: self.bounded_responses_tx.clone(),
+                    response_guard,
                     abort_registration,
                 })))
             }
@@ -400,13 +417,22 @@ where
             ready!(self.channel_pin_mut().poll_flush(cx)?);
         }
 
-        match ready!(self.as_mut().project().pending_responses.poll_next(cx)) {
-            Some(response) => Poll::Ready(Some(Ok(response))),
-            None => {
-                // This branch likely won't happen, since the Requests is holding a Sender.
-                Poll::Ready(None)
-            }
-        }
+        struct Closed;
+        let bounded_closed = match self.as_mut().project().bounded_responses.poll_next(cx) {
+            Poll::Ready(Some(response)) => return Poll::Ready(Some(Ok(response))),
+            Poll::Ready(None) => Poll::Ready(Closed),
+            Poll::Pending => Poll::Pending,
+        };
+        let unbounded_closed = match self.as_mut().project().unbounded_responses.poll_next(cx) {
+            Poll::Ready(Some(response)) => return Poll::Ready(Some(Ok(response))),
+            Poll::Ready(None) => Poll::Ready(Closed),
+            Poll::Pending => Poll::Pending,
+        };
+
+        // This likely won't happen, since the Requests struct is holding the
+        // Senders.
+        let (Closed, Closed) = (ready!(bounded_closed), ready!(unbounded_closed));
+        Poll::Ready(None)
     }
 }
 
@@ -414,8 +440,54 @@ where
 #[derive(Debug)]
 pub struct InFlightRequest<Req, Res> {
     request: Request<Req>,
-    response_tx: async_channel::Sender<Response<Res>>,
+    bounded_response_tx: async_channel::Sender<Response<Res>>,
+    response_guard: ResponseGuard<Res>,
     abort_registration: AbortRegistration,
+}
+
+/// ResponseGuard is responsible for sending a response if the actual response never
+/// completes. This can happen if the future returned by `execute` is dropped before
+/// completing -- e.g. a service might have its own conditions under which responses
+/// are aborted early.
+#[derive(Debug)]
+struct ResponseGuard<Res> {
+    unbounded_response_tx: async_channel::Sender<Response<Res>>,
+    incomplete: Option<(context::Context, u64)>,
+}
+
+impl<Res> ResponseGuard<Res> {
+    // Ends the guard so that it doesn't run when dropped.
+    fn end(&mut self) {
+        self.incomplete.take();
+    }
+}
+
+impl<Res> Drop for ResponseGuard<Res> {
+    fn drop(&mut self) {
+        if let Some((context, request_id)) = self.incomplete.take() {
+            trace!(
+                "Response for request {} was dropped before completion.",
+                request_id
+            );
+            let sent = self.unbounded_response_tx.try_send(Response {
+                context,
+                request_id,
+                message: Err(ServerError {
+                    kind: io::ErrorKind::Interrupted,
+                    detail: Some("Response was dropped before completion.".into()),
+                }),
+            });
+            if let Err(async_channel::TrySendError::Full(sent)) = sent {
+                // unbounded_response_tx is an unbounded sender, so this should always succeed.
+                // On the off chance it doesn't, though, it's not really serious enough to
+                // warrant panicking.
+                warn!(
+                    "[{}] Unbounded sender blocked; this is unexpected.",
+                    sent.context.trace_context.trace_id
+                );
+            }
+        }
+    }
 }
 
 impl<Req, Res> InFlightRequest<Req, Res> {
@@ -443,7 +515,8 @@ impl<Req, Res> InFlightRequest<Req, Res> {
         let Self {
             abort_registration,
             request,
-            response_tx,
+            bounded_response_tx,
+            mut response_guard,
         } = self;
         Abortable::new(
             async move {
@@ -486,11 +559,15 @@ impl<Req, Res> InFlightRequest<Req, Res> {
                         }
                     },
                 };
-                let _ = response_tx.send(response).await;
+                let _ = bounded_response_tx.send(response).await;
             },
             abort_registration,
         )
         .unwrap_or_else(|_| {})
+        .map(move |()| {
+            // The response completed or was cancelled, so we can end the drop guard.
+            response_guard.end();
+        })
     }
 }
 
@@ -504,7 +581,8 @@ where
         loop {
             let read = self.as_mut().pump_read(cx)?;
             let read_closed = matches!(read, Poll::Ready(None));
-            match (read, self.as_mut().pump_write(cx, read_closed)?) {
+            let write = self.as_mut().pump_write(cx, read_closed)?;
+            match (read, write) {
                 (Poll::Ready(None), Poll::Ready(None)) => {
                     return Poll::Ready(None);
                 }
@@ -512,7 +590,7 @@ where
                     return Poll::Ready(Some(Ok(request_handler)));
                 }
                 (_, Poll::Ready(Some(()))) => {}
-                _ => {
+                (Poll::Pending, _) | (_, Poll::Pending) => {
                     return Poll::Pending;
                 }
             }
