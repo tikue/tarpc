@@ -1,6 +1,6 @@
 use crate::{
     context,
-    server::{send, Serve},
+    server::{Serve},
     trace,
     util::Compact,
     util::TimeUntil,
@@ -115,7 +115,7 @@ where
     where
         Self: Sized,
         S: Serve<Self::Req, Resp = Self::Resp> + Send + Sync + 'static,
-        for<'a> S::Fut<'a>: send::Send<'a>,
+        for<'a> S::Fut<'a>: super::send::Send<'a>,
         Self::Req: Send + 'static,
         Self::Resp: Send + 'static,
     {
@@ -645,7 +645,7 @@ where
     C::Req: Send + 'static,
     C::Resp: Send + 'static,
     S: Serve<C::Req, Resp = C::Resp> + Send + Sync + 'static + Clone,
-    for<'a> S::Fut<'a>: send::Send<'a>,
+    for<'a> S::Fut<'a>: super::send::Send<'a>,
 {
     type Output = ();
 

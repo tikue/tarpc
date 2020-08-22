@@ -7,13 +7,17 @@
 //! Provides a server that concurrently handles many connections sending multiplexed requests.
 
 use crate::{context, ClientMessage, Response, Transport};
-use futures::{prelude::*, ready};
-use pin_project::pin_project;
+use futures::prelude::*;
 use std::{
     fmt,
     hash::Hash,
-    pin::Pin,
-    task::{Context, Poll},
+};
+
+#[cfg(feature = "tokio1")]
+use {
+    futures::ready,
+    pin_project::pin_project,
+    std::{pin::Pin, task::{Context, Poll}},
 };
 
 pub use channel::Channel;
