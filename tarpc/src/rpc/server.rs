@@ -8,16 +8,16 @@
 
 use crate::{context, ClientMessage, Response, Transport};
 use futures::prelude::*;
-use std::{
-    fmt,
-    hash::Hash,
-};
+use std::{fmt, hash::Hash};
 
 #[cfg(feature = "tokio1")]
 use {
     futures::ready,
     pin_project::pin_project,
-    std::{pin::Pin, task::{Context, Poll}},
+    std::{
+        pin::Pin,
+        task::{Context, Poll},
+    },
 };
 
 pub use channel::Channel;

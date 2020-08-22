@@ -1,10 +1,6 @@
 use crate::{
-    context,
-    server::{Serve},
-    trace,
-    util::Compact,
-    util::TimeUntil,
-    ClientMessage, PollIo, Request, Response, ServerError, Transport,
+    context, server::Serve, trace, util::Compact, util::TimeUntil, ClientMessage, PollIo, Request,
+    Response, ServerError, Transport,
 };
 use fnv::FnvHashMap;
 use futures::{
