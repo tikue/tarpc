@@ -8,7 +8,7 @@
 //! client to server and is used by the server to enforce response deadlines.
 
 use crate::{
-    rpc::context::extensions::Extensions,
+    context::extensions::Extensions,
     trace::{self, TraceId},
     ClientMessage, Request, Response,
 };
