@@ -614,7 +614,7 @@ impl<'a> ServiceGenerator<'a> {
 
         quote! {
             impl<C> From<C> for #client_ident<C>
-                where C: tarpc::Client<#request_ident, Response = #response_ident>
+                where C: tarpc::client::Client<#request_ident, Response = #response_ident>
             {
                 fn from(client: C) -> Self {
                     #client_ident(client)
@@ -682,7 +682,7 @@ impl<'a> ServiceGenerator<'a> {
 
         quote! {
             impl<C> #client_ident<C>
-                where C: tarpc::Client<#request_ident, Response = #response_ident>
+                where C: tarpc::client::Client<#request_ident, Response = #response_ident>
             {
                 #(
                     #[allow(unused)]

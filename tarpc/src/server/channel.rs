@@ -85,6 +85,37 @@ where
 
     /// Returns a stream of requests that automatically handle request cancellation and response
     /// routing.
+    ///
+    /// The [`Requests`] stream must be driven, e.g. by calling
+    /// [`StreamExt::next`](futures::stream::StreamExt::next) in a loop. Responses will only be
+    /// written to the client while the stream is being driven.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// use futures::prelude::*;
+    /// use tarpc::{client::{self, NewClient}, context, server::{self, Channel as _, serve}, transport};
+    ///
+    /// let (to_server, from_client) = transport::channel::unbounded();
+    ///
+    /// tokio::spawn(async move {
+    ///     let channel = server::channel::new(from_client);
+    ///     let mut requests = channel.requests();
+    ///     while let Some(Ok(request)) = requests.next().await {
+    ///         request.execute(serve(|_, name| async move { format!("Hello, {}!", name) })).await;
+    ///     }
+    /// });
+    ///
+    /// let NewClient { client, dispatch } = client::new(client::Config::default(), to_server);
+    /// tokio::spawn(dispatch.unwrap_or_else(|_| ()));
+    /// let response = client.call(context::current(), "Friend".to_string()).await.unwrap();
+    ///
+    /// assert_eq!(response, "Hello, Friend!");
+    /// # }
+    ///
+    /// ```
     fn requests(self) -> Requests<Self>
     where
         Self: Sized,
@@ -105,6 +136,29 @@ where
     /// Runs the channel until completion by executing all requests using the given service
     /// function. Request handlers are run concurrently by [spawning](tokio::spawn) on tokio's
     /// default executor.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// use futures::{sink::SinkExt, stream::StreamExt};
+    /// use tarpc::{server::{Channel as _, serve}, client, context, server, transport};
+    ///
+    /// let (to_server, from_client) = transport::channel::unbounded();
+    ///
+    /// tokio::spawn(async move {
+    ///     let channel = server::channel::new(from_client);
+    ///     channel.execute(serve(|_, name| async move { format!("Hello, {}!", name) })).await;
+    /// });
+    ///
+    /// let client = client::new(client::Config::default(), to_server).spawn().unwrap();
+    /// let response = client.call(context::current(), "Friend".to_string()).await.unwrap();
+    ///
+    /// assert_eq!(response, "Hello, Friend!");
+    /// # }
+    ///
+    /// ```
     #[cfg(feature = "tokio1")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tokio1")))]
     fn execute<S>(self, serve: S) -> TokioChannelExecutor<Requests<Self>, S>
@@ -433,6 +487,9 @@ where
 }
 
 /// A request produced by [Channel::requests].
+///
+/// If a response is not completed before InFlightRequest is dropped, an error response will be
+/// returned to the client.
 #[derive(Debug)]
 pub struct InFlightRequest<Req, Res> {
     request: Request<Req>,
@@ -502,9 +559,9 @@ impl<Req, Res> InFlightRequest<Req, Res> {
     ///    message](ClientMessage::Cancel) for this request.
     /// 2. The request [deadline](crate::context::Context::deadline) is reached.
     /// 3. The service function completes.
-    pub fn execute<'a, S>(self, serve: &'a mut S) -> impl Future<Output = ()> + 'a
+    pub fn execute<'a, S>(self, mut serve: S) -> impl Future<Output = ()> + 'a
     where
-        S: Serve<Req, Resp = Res>,
+        S: Serve<Req, Resp = Res> + 'a,
         Req: 'a,
         Res: 'a,
     {
@@ -543,8 +600,6 @@ impl<Req, Res> InFlightRequest<Req, Res> {
                                 trace_id,
                                 format_rfc3339(deadline)
                             );
-                            // No point in responding, since the client will have dropped the
-                            // request.
                             Err(ServerError {
                                 kind: io::ErrorKind::TimedOut,
                                 detail: Some(format!(

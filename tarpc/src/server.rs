@@ -22,7 +22,7 @@ use {
 
 pub use channel::Channel;
 
-/// Channel configurations.
+/// Provides the [`Channel`] abstraction.
 pub mod channel;
 
 #[cfg(test)]
@@ -37,7 +37,7 @@ where
     listener.map(channel::BaseChannel::new)
 }
 
-/// Equivalent to a `Fn(Req) -> impl Future<Output = Resp>`.
+/// Equivalent to a `FnMut(Req) -> impl Future<Output = Resp>`.
 pub trait Serve<Req> {
     /// Type of response.
     type Resp;
@@ -48,6 +48,45 @@ pub trait Serve<Req> {
 
     /// Responds to a single request.
     fn serve<'a>(&'a mut self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a>;
+}
+
+/// Converts `FnMut(&mut context::Context, Req) -> impl Future<Output = Response>` to
+/// a `Serve<Req>` impl.
+pub fn serve<Req, F, Fut>(f: F) -> ServeFn<F>
+where
+    F: FnMut(&mut context::Context, Req) -> Fut,
+    Fut: Future,
+{
+    ServeFn(f)
+}
+
+/// A wrapper around a FnMut that impls Serve.
+#[derive(Clone, Copy, Debug)]
+pub struct ServeFn<F>(F);
+
+impl<Req, Resp, F, Fut> Serve<Req> for ServeFn<F>
+where
+    F: FnMut(&mut context::Context, Req) -> Fut,
+    Fut: Future<Output = Resp>,
+{
+    type Resp = Resp;
+    type Fut<'a> = Fut;
+
+    fn serve<'a>(&'a mut self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a> {
+        self.0(ctx, req)
+    }
+}
+
+impl<Req, S> Serve<Req> for &mut S
+where
+    S: Serve<Req>,
+{
+    type Resp = S::Resp;
+    type Fut<'a> = S::Fut<'a>;
+
+    fn serve<'a>(&'a mut self, ctx: &'a mut context::Context, req: Req) -> Self::Fut<'a> {
+        <S as Serve<_>>::serve(*self, ctx, req)
+    }
 }
 
 /// An extension trait for [streams](Stream) of [`Channels`](Channel).

@@ -86,7 +86,11 @@ impl<Req, Resp> Channel<Req, Resp> {
 
     /// Sends a request to the dispatch task to forward to the server, returning a [`Future`] that
     /// resolves to the response.
-    pub async fn call(&self, ctx: context::Context, request: Req) -> io::Result<Resp> {
+    pub fn call(
+        &self,
+        ctx: context::Context,
+        request: Req,
+    ) -> impl Future<Output = io::Result<Resp>> + '_ {
         let timeout = ctx.deadline.time_until();
         trace!(
             "[{}] Queuing request with timeout {:?}.",
@@ -94,13 +98,20 @@ impl<Req, Resp> Channel<Req, Resp> {
             timeout,
         );
 
-        let response = async { self.send(ctx, request).await?.await };
-        match tokio::time::timeout(timeout, response).await {
-            Ok(resp) => resp,
-            Err(tokio::time::Elapsed { .. }) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Client dropped expired request.".to_string(),
-            )),
+        // `call` (this method) is not an async fn because the timeout needs to be generated
+        // immediately. Otherwise, an executor may choose not to schedule this future for an
+        // arbitrary amount of time, rendering the timeout imprecise.
+        let response =
+            tokio::time::timeout(timeout, async move { self.send(ctx, request).await?.await });
+
+        async {
+            match response.await {
+                Ok(resp) => resp,
+                Err(tokio::time::Elapsed { .. }) => Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Client dropped expired request.".to_string(),
+                )),
+            }
         }
     }
 }
