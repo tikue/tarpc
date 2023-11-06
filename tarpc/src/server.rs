@@ -75,7 +75,7 @@ pub trait Serve {
     type Resp;
 
     /// Responds to a single request.
-    async fn serve(self, ctx: context::Context, req: Self::Req) -> Result<Self::Resp, ServerError>;
+    fn serve(self, ctx: &mut context::Context, req: Self::Req) -> impl Future<Output = Result<Self::Resp, ServerError>>;
 
     /// Extracts a method name from the request.
     fn method(&self, _request: &Self::Req) -> Option<&'static str> {
@@ -112,7 +112,8 @@ pub trait Serve {
     ///                 Ok(())
     ///             })
     ///     });
-    /// let response = serve.serve(context::current(), 1);
+    /// let mut ctx = context::current();
+    /// let response = serve.serve(&mut ctx, 1);
     /// assert!(block_on(response).is_err());
     /// ```
     fn before<Hook>(self, hook: Hook) -> BeforeRequestHook<Self, Hook>
@@ -155,7 +156,8 @@ pub trait Serve {
     ///         future::ready(())
     ///     });
     ///
-    /// let response = serve.serve(context::current(), 1);
+    /// let mut ctx = context::current();
+    /// let response = serve.serve(&mut ctx, 1);
     /// assert!(block_on(response).is_err());
     /// ```
     fn after<Hook>(self, hook: Hook) -> AfterRequestHook<Self, Hook>
@@ -210,7 +212,8 @@ pub trait Serve {
     /// let serve = serve(|_ctx, i| async move {
     ///         Ok(i + 1)
     ///     }).before_and_after(PrintLatency(Instant::now()));
-    /// let response = serve.serve(context::current(), 1);
+    /// let mut ctx = context::current();
+    /// let response = serve.serve(&mut ctx, 1);
     /// assert!(block_on(response).is_ok());
     /// ```
     fn before_and_after<Hook>(
@@ -250,7 +253,7 @@ impl<Req, Resp, F> Copy for ServeFn<Req, Resp, F> where F: Copy {}
 /// Result<Resp, ServerError>>`.
 pub fn serve<Req, Resp, Fut, F>(f: F) -> ServeFn<Req, Resp, F>
 where
-    F: FnOnce(context::Context, Req) -> Fut,
+    F: FnOnce(&mut context::Context, Req) -> Fut,
     Fut: Future<Output = Result<Resp, ServerError>>,
 {
     ServeFn {
@@ -261,13 +264,13 @@ where
 
 impl<Req, Resp, Fut, F> Serve for ServeFn<Req, Resp, F>
 where
-    F: FnOnce(context::Context, Req) -> Fut,
+    F: FnOnce(&mut context::Context, Req) -> Fut,
     Fut: Future<Output = Result<Resp, ServerError>>,
 {
     type Req = Req;
     type Resp = Resp;
 
-    async fn serve(self, ctx: context::Context, req: Req) -> Result<Resp, ServerError> {
+    async fn serve(self, ctx: &mut context::Context, req: Req) -> Result<Resp, ServerError> {
         (self.f)(ctx, req).await
     }
 }
@@ -352,7 +355,7 @@ where
         let span = info_span!(
             "RPC",
             rpc.trace_id = %request.context.trace_id(),
-            rpc.deadline = %humantime::format_rfc3339(request.context.deadline),
+            rpc.deadline = %humantime::format_rfc3339(*request.context.deadline),
             otel.kind = "server",
             otel.name = tracing::field::Empty,
         );
@@ -367,8 +370,8 @@ where
         let entered = span.enter();
         tracing::info!("ReceiveRequest");
         let start = self.in_flight_requests_mut().start_request(
-            request.id,
-            request.context.deadline,
+            request.request_id,
+            *request.context.deadline,
             span.clone(),
         );
         match start {
@@ -378,7 +381,7 @@ where
                     abort_registration,
                     span,
                     response_guard: ResponseGuard {
-                        request_id: request.id,
+                        request_id: request.request_id,
                         request_cancellation: self.request_cancellation.clone(),
                         cancel: false,
                     },
@@ -651,12 +654,12 @@ where
                         }
                     }
                     ClientMessage::Cancel {
-                        trace_context,
+                        trace_context: context,
                         request_id,
                     } => {
                         if !self.in_flight_requests_mut().cancel_request(request_id) {
                             tracing::trace!(
-                                rpc.trace_id = %trace_context.trace_id,
+                                rpc.trace_id = %context.trace_id,
                                 "Received cancellation, but response handler is already complete.",
                             );
                         }
@@ -1034,9 +1037,9 @@ impl<Req, Res> InFlightRequest<Req, Res> {
             span,
             request:
                 Request {
-                    context,
+                    mut context,
                     message,
-                    id: request_id,
+                    request_id,
                 },
         } = self;
         let method = serve.method(&message);
@@ -1046,9 +1049,10 @@ impl<Req, Res> InFlightRequest<Req, Res> {
         span.record("otel.name", &method.unwrap_or(""));
         let _ = Abortable::new(
             async move {
-                let message = serve.serve(context, message).await;
+                let message = serve.serve(&mut context, message).await;
                 tracing::info!("CompleteRequest");
                 let response = Response {
+                    context,
                     request_id,
                     message,
                 };
@@ -1139,6 +1143,7 @@ mod tests {
         task::Poll,
         time::{Duration, Instant, SystemTime},
     };
+    use std::ops::Deref;
 
     fn test_channel<Req, Resp>() -> (
         Pin<Box<BaseChannel<Req, Resp, UnboundedChannel<ClientMessage<Req>, Response<Resp>>>>>,
@@ -1188,7 +1193,7 @@ mod tests {
     fn fake_request<Req>(req: Req) -> ClientMessage<Req> {
         ClientMessage::Request(Request {
             context: context::current(),
-            id: 0,
+            request_id: 0,
             message: req,
         })
     }
@@ -1202,7 +1207,7 @@ mod tests {
     #[tokio::test]
     async fn test_serve() {
         let serve = serve(|_, i| async move { Ok(i) });
-        assert_matches!(serve.serve(context::current(), 7).await, Ok(7));
+        assert_matches!(serve.serve(&mut context::current(), 7).await, Ok(7));
     }
 
     #[tokio::test]
@@ -1217,7 +1222,7 @@ mod tests {
                 _: &'a Req,
             ) -> Self::Fut<'a> {
                 async move {
-                    ctx.deadline = self.0;
+                    *ctx.deadline = self.0;
                     Ok(())
                 }
             }
@@ -1226,14 +1231,18 @@ mod tests {
         let some_time = SystemTime::UNIX_EPOCH + Duration::from_secs(37);
         let some_other_time = SystemTime::UNIX_EPOCH + Duration::from_secs(83);
 
-        let serve = serve(move |ctx: context::Context, i| async move {
-            assert_eq!(ctx.deadline, some_time);
-            Ok(i)
+        let serve = serve(|ctx: &mut context::Context, i| {
+            let deadline = ctx.deadline.deref().clone();
+
+            async move {
+                assert_eq!(deadline, some_time);
+                Ok(i)
+            }
         });
         let deadline_hook = serve.before(SetDeadline(some_time));
         let mut ctx = context::current();
-        ctx.deadline = some_other_time;
-        deadline_hook.serve(ctx, 7).await?;
+        *ctx.deadline = some_other_time;
+        deadline_hook.serve(&mut ctx, 7).await?;
         Ok(())
     }
 
@@ -1275,10 +1284,10 @@ mod tests {
             }
         }
 
-        let serve = serve(move |_: context::Context, i| async move { Ok(i) });
+        let serve = serve(move |_: &mut context::Context, i| async move { Ok(i) });
         serve
             .before_and_after(PrintLatency::new())
-            .serve(context::current(), 7)
+            .serve(&mut context::current(), 7)
             .await?;
         Ok(())
     }
@@ -1289,7 +1298,7 @@ mod tests {
         let deadline_hook = serve.before(|_: &mut context::Context, _: &i32| async {
             Err(ServerError::new(io::ErrorKind::Other, "oops".into()))
         });
-        let resp: Result<i32, _> = deadline_hook.serve(context::current(), 7).await;
+        let resp: Result<i32, _> = deadline_hook.serve(&mut context::current(), 7).await;
         assert_matches!(resp, Err(_));
         Ok(())
     }
@@ -1301,14 +1310,14 @@ mod tests {
         channel
             .as_mut()
             .start_request(Request {
-                id: 0,
+                request_id: 0,
                 context: context::current(),
                 message: (),
             })
             .unwrap();
         assert_matches!(
             channel.as_mut().start_request(Request {
-                id: 0,
+                request_id: 0,
                 context: context::current(),
                 message: ()
             }),
@@ -1324,7 +1333,7 @@ mod tests {
         let req0 = channel
             .as_mut()
             .start_request(Request {
-                id: 0,
+                request_id: 0,
                 context: context::current(),
                 message: (),
             })
@@ -1332,7 +1341,7 @@ mod tests {
         let req1 = channel
             .as_mut()
             .start_request(Request {
-                id: 1,
+                request_id: 1,
                 context: context::current(),
                 message: (),
             })
@@ -1355,7 +1364,7 @@ mod tests {
         let req = channel
             .as_mut()
             .start_request(Request {
-                id: 0,
+                request_id: 0,
                 context: context::current(),
                 message: (),
             })
@@ -1384,7 +1393,7 @@ mod tests {
         let _abort_registration = channel
             .as_mut()
             .start_request(Request {
-                id: 0,
+                request_id: 0,
                 context: context::current(),
                 message: (),
             })
@@ -1426,7 +1435,7 @@ mod tests {
         let req = channel
             .as_mut()
             .start_request(Request {
-                id: 0,
+                request_id: 0,
                 context: context::current(),
                 message: (),
             })
@@ -1449,7 +1458,7 @@ mod tests {
         channel
             .as_mut()
             .start_request(Request {
-                id: 0,
+                request_id: 0,
                 context: context::current(),
                 message: (),
             })
@@ -1458,6 +1467,7 @@ mod tests {
         channel
             .as_mut()
             .start_send(Response {
+                context: context::current(),
                 request_id: 0,
                 message: Ok(()),
             })
@@ -1512,7 +1522,7 @@ mod tests {
             .as_mut()
             .channel_pin_mut()
             .start_request(Request {
-                id: 0,
+                request_id: 0,
                 context: context::current(),
                 message: (),
             })
@@ -1521,6 +1531,7 @@ mod tests {
             .as_mut()
             .channel_pin_mut()
             .start_send(Response {
+                context: context::current(),
                 request_id: 0,
                 message: Ok(()),
             })
@@ -1532,6 +1543,7 @@ mod tests {
             .project()
             .responses_tx
             .send(Response {
+                context: context::current(),
                 request_id: 1,
                 message: Ok(()),
             })
@@ -1542,7 +1554,7 @@ mod tests {
             .as_mut()
             .channel_pin_mut()
             .start_request(Request {
-                id: 1,
+                request_id: 1,
                 context: context::current(),
                 message: (),
             })
@@ -1563,7 +1575,7 @@ mod tests {
             .as_mut()
             .channel_pin_mut()
             .start_request(Request {
-                id: 0,
+                request_id: 0,
                 context: context::current(),
                 message: (),
             })
@@ -1572,6 +1584,7 @@ mod tests {
             .as_mut()
             .channel_pin_mut()
             .start_send(Response {
+                context: context::current(),
                 request_id: 0,
                 message: Ok(()),
             })
@@ -1582,7 +1595,7 @@ mod tests {
             .as_mut()
             .channel_pin_mut()
             .start_request(Request {
-                id: 1,
+                request_id: 1,
                 context: context::current(),
                 message: (),
             })
@@ -1592,6 +1605,7 @@ mod tests {
             .project()
             .responses_tx
             .send(Response {
+                context: context::current(),
                 request_id: 1,
                 message: Ok(()),
             })

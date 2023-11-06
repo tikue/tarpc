@@ -80,8 +80,6 @@
 //! First, let's set up the dependencies and service definition.
 //!
 //! ```rust
-//! #![allow(incomplete_features)]
-//! #![feature(async_fn_in_trait)]
 //! # extern crate futures;
 //!
 //! use futures::{
@@ -106,8 +104,6 @@
 //! implement it for our Server struct.
 //!
 //! ```rust
-//! # #![allow(incomplete_features)]
-//! # #![feature(async_fn_in_trait)]
 //! # extern crate futures;
 //! # use futures::{
 //! #     future::{self, Ready},
@@ -131,7 +127,7 @@
 //!
 //! impl World for HelloServer {
 //!     // Each defined rpc generates an async fn that serves the RPC
-//!     async fn hello(self, _: context::Context, name: String) -> String {
+//!     async fn hello(self, _: &mut context::Context, name: String) -> String {
 //!         format!("Hello, {name}!")
 //!     }
 //! }
@@ -143,8 +139,6 @@
 //! available behind the `tcp` feature.
 //!
 //! ```rust
-//! # #![allow(incomplete_features)]
-//! # #![feature(async_fn_in_trait)]
 //! # extern crate futures;
 //! # use futures::{
 //! #     future::{self, Ready},
@@ -167,7 +161,7 @@
 //! # struct HelloServer;
 //! # impl World for HelloServer {
 //!     // Each defined rpc generates an async fn that serves the RPC
-//! #     async fn hello(self, _: context::Context, name: String) -> String {
+//! #     async fn hello(self, _: &mut context::Context, name: String) -> String {
 //! #         format!("Hello, {name}!")
 //! #     }
 //! # }
@@ -205,14 +199,12 @@
 //!
 //! Use `cargo doc` as you normally would to see the documentation created for all
 //! items expanded by a `service!` invocation.
-// For async_fn_in_trait
-#![allow(incomplete_features)]
 #![feature(
     iter_intersperse,
     type_alias_impl_trait,
-    async_fn_in_trait,
-    return_position_impl_trait_in_trait
 )]
+#![cfg_attr(feature = "serde1", feature(async_closure))]
+
 #![deny(missing_docs)]
 #![allow(clippy::type_complexity)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -238,7 +230,6 @@ pub use tarpc_plugins::derive_serde;
 /// Rpc methods are specified, mirroring trait syntax:
 ///
 /// ```
-/// #![feature(async_fn_in_trait)]
 /// #[tarpc::service]
 /// trait Service {
 /// /// Say hello
@@ -298,14 +289,14 @@ pub enum ClientMessage<T> {
 }
 
 /// A request from a client to a server.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde1", derive(serde::Serialize, serde::Deserialize))]
 pub struct Request<T> {
     /// Trace context, deadline, and other cross-cutting concerns.
     pub context: context::Context,
     /// Uniquely identifies the request across all requests sent over a single channel.
-    pub id: u64,
+    pub request_id: u64,
     /// The request body.
     pub message: T,
 }
@@ -315,6 +306,9 @@ pub struct Request<T> {
 #[non_exhaustive]
 #[cfg_attr(feature = "serde1", derive(serde::Serialize, serde::Deserialize))]
 pub struct Response<T> {
+    /// Trace context, deadline, and other cross-cutting concerns.
+    #[cfg_attr(feature = "serde1", serde(skip))]
+    pub context: context::Context,
     /// The ID of the request being responded to.
     pub request_id: u64,
     /// The response body, or an error if the request failed.

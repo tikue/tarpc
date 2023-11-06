@@ -1,6 +1,3 @@
-#![allow(incomplete_features)]
-#![feature(async_fn_in_trait)]
-
 use futures::prelude::*;
 use tarpc::serde_transport;
 use tarpc::{
@@ -25,7 +22,7 @@ pub trait ColorProtocol {
 struct ColorServer;
 
 impl ColorProtocol for ColorServer {
-    async fn get_opposite_color(self, _: context::Context, color: TestData) -> TestData {
+    async fn get_opposite_color(self, _: &mut context::Context, color: TestData) -> TestData {
         match color {
             TestData::White => TestData::Black,
             TestData::Black => TestData::White,

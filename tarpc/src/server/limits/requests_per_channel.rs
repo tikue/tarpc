@@ -66,7 +66,8 @@ where
                     );
 
                     self.as_mut().start_send(Response {
-                        request_id: r.request.id,
+                        context: r.request.context,
+                        request_id: r.request.request_id,
                         message: Err(ServerError {
                             kind: io::ErrorKind::WouldBlock,
                             detail: "server throttled the request.".into(),
@@ -188,6 +189,7 @@ mod tests {
         time::{Duration, SystemTime},
     };
     use tracing::Span;
+    use crate::context;
 
     #[tokio::test]
     async fn throttler_in_flight_requests() {
@@ -236,7 +238,7 @@ mod tests {
             throttler
                 .as_mut()
                 .poll_next(&mut testing::cx())?
-                .map(|r| r.map(|r| (r.request.id, r.request.message))),
+                .map(|r| r.map(|r| (r.request.request_id, r.request.message))),
             Poll::Ready(Some((0, 1)))
         );
         Ok(())
@@ -335,15 +337,13 @@ mod tests {
             .start_send(Response {
                 request_id: 0,
                 message: Ok(1),
+                context: context::current()
             })
             .unwrap();
         assert_eq!(throttler.inner.in_flight_requests.len(), 0);
         assert_eq!(
-            throttler.inner.sink.get(0),
-            Some(&Response {
-                request_id: 0,
-                message: Ok(1),
-            })
+            throttler.inner.sink.get(0).map(|resp| (resp.request_id, &resp.message)),
+            Some((0, &Ok(1))),
         );
     }
 }

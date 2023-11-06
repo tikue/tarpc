@@ -14,7 +14,7 @@ where
 {
     type Req = Req;
     type Resp = Stub::Resp;
-    type RespFut<'a> = RespFut<'a, Stub, Self::Req, F>
+    type RespFut<'a> = RespFut<'a, Stub, Req, F>
         where Self: 'a,
               Self::Req: 'a;
 
@@ -28,7 +28,8 @@ where
     }
 }
 
-type RespFut<'a, Stub: stub::Stub + 'a, Req: 'a, F: 'a> =
+/// A type alias for a response future
+pub type RespFut<'a, Stub: stub::Stub + 'a, Req: 'a, F: 'a> =
     impl Future<Output = Result<Stub::Resp, RpcError>> + 'a;
 
 /// A Stub that retries requests based on response contents.
@@ -62,7 +63,7 @@ where
         for i in 1.. {
             let result = self
                 .stub
-                .call(ctx, request_name, Arc::clone(&request))
+                .call(ctx.clone(), request_name, Arc::clone(&request))
                 .await;
             if (self.should_retry)(&result, i) {
                 tracing::trace!("Retrying on attempt {i}");

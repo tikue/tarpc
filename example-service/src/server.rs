@@ -3,10 +3,6 @@
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
-
-#![allow(incomplete_features)]
-#![feature(async_fn_in_trait)]
-
 use clap::Parser;
 use futures::{future, prelude::*};
 use rand::{
@@ -38,7 +34,7 @@ struct Flags {
 struct HelloServer(SocketAddr);
 
 impl World for HelloServer {
-    async fn hello(self, _: context::Context, name: String) -> String {
+    async fn hello(self, _: &mut context::Context, name: String) -> String {
         let sleep_time =
             Duration::from_millis(Uniform::new_inclusive(1, 10).sample(&mut thread_rng()));
         time::sleep(sleep_time).await;
