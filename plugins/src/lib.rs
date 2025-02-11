@@ -331,6 +331,18 @@ struct ServiceGenerator<'a> {
 }
 
 impl<'a> ServiceGenerator<'a> {
+
+    fn derive_ts_rs(&self) -> TokenStream2 {
+        if cfg!(feature = "ts-rs") {
+            quote! {
+                #[derive(::ts_rs::TS)]
+                #[ts(export)]
+            }
+        } else {
+            quote! {}
+        }
+    }
+
     fn trait_service(&self) -> TokenStream2 {
         let &Self {
             attrs,
@@ -458,10 +470,13 @@ impl<'a> ServiceGenerator<'a> {
             ..
         } = self;
 
+        let derive_ts_rs = self.derive_ts_rs();
+
         quote! {
             /// The request sent over the wire from the client to the server.
             #[allow(missing_docs)]
             #[derive(Debug)]
+            #derive_ts_rs
             #derive_serialize
             #vis enum #request_ident {
                 #( #camel_case_idents{ #( #args ),* } ),*
@@ -479,10 +494,13 @@ impl<'a> ServiceGenerator<'a> {
             ..
         } = self;
 
+        let derive_ts_rs = self.derive_ts_rs();
+
         quote! {
             /// The response sent over the wire from the server to the client.
             #[allow(missing_docs)]
             #[derive(Debug)]
+            #derive_ts_rs
             #derive_serialize
             #vis enum #response_ident {
                 #( #camel_case_idents(#return_types) ),*

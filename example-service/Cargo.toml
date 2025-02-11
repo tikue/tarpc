@@ -26,6 +26,7 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tracing = { version = "0.1" }
 tracing-opentelemetry = "0.17"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
+ts-rs = "10.1.0"
 
 [lib]
 name = "service"

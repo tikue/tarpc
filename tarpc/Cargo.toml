@@ -26,6 +26,7 @@ serde-transport-json = ["tokio-serde/json"]
 serde-transport-bincode = ["tokio-serde/bincode"]
 tcp = ["tokio/net"]
 unix = ["tokio/net"]
+ts-rs = ["tarpc-plugins/ts-rs"]
 
 full = [
     "serde1",
@@ -35,6 +36,7 @@ full = [
     "serde-transport-bincode",
     "tcp",
     "unix",
+    "ts-rs"
 ]
 
 [badges]
