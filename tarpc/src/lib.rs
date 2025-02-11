@@ -203,7 +203,6 @@
     iter_intersperse,
     type_alias_impl_trait,
 )]
-#![cfg_attr(feature = "serde1", feature(async_closure))]
 
 #![deny(missing_docs)]
 #![allow(clippy::type_complexity)]
