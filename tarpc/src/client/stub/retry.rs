@@ -29,7 +29,7 @@ where
 }
 
 /// A type alias for a response future
-pub type RespFut<'a, Stub: stub::Stub + 'a, Req: 'a, F: 'a> =
+pub type RespFut<'a, Stub: stub::Stub + 'a, Req: 'a, F: 'a + for<'b> Fn(&'b Result<<Stub as stub::Stub>::Resp, RpcError>, u32) -> bool> where Stub: stub::Stub<Req = Arc<Req>> =
     impl Future<Output = Result<Stub::Resp, RpcError>> + 'a;
 
 /// A Stub that retries requests based on response contents.

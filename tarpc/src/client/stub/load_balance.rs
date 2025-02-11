@@ -128,7 +128,7 @@ mod consistent_hash {
     impl<Stub> stub::Stub for ConsistentHash<Stub>
     where
         Stub: stub::Stub,
-        Stub::Req: Hash,
+        <Stub as stub::Stub>::Req: Hash
     {
         type Req = Stub::Req;
         type Resp = Stub::Resp;
@@ -145,7 +145,7 @@ mod consistent_hash {
         }
     }
 
-    pub type RespFut<'a, Stub: stub::Stub + 'a> =
+    pub type RespFut<'a, Stub: stub::Stub + 'a> where <Stub as stub::Stub>::Req: Hash =
         impl Future<Output = Result<Stub::Resp, RpcError>> + 'a;
 
     /// A Stub that load-balances across backing stubs by round robin.
@@ -175,7 +175,7 @@ mod consistent_hash {
     impl<Stub, S> ConsistentHash<Stub, S>
     where
         Stub: stub::Stub,
-        Stub::Req: Hash,
+        <Stub as stub::Stub>::Req: Hash,
         S: BuildHasher,
     {
         /// Returns a new RoundRobin stub.
