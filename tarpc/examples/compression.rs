@@ -74,7 +74,7 @@ where
 }
 
 fn serialize<T: Serialize>(t: T) -> io::Result<ByteBuf> {
-    bincode::serialize(&t)
+    bincode::serde::encode_to_vec(&t, bincode::config::standard())
         .map(ByteBuf::from)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
 }
@@ -83,7 +83,9 @@ fn deserialize<D>(message: ByteBuf) -> io::Result<D>
 where
     for<'a> D: Deserialize<'a>,
 {
-    bincode::deserialize(message.as_ref()).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    let (d, _) = bincode::serde::decode_from_slice(message.as_ref(), bincode::config::standard())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    Ok(d)
 }
 
 fn add_compression<In, Out>(
