@@ -34,6 +34,7 @@ use tarpc::{
     tokio_serde::formats::Json,
 };
 use tokio::net::TcpStream;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing_subscriber::prelude::*;
 
 pub mod add {
@@ -108,7 +109,14 @@ pub fn init_tracing(
 }
 
 async fn listen_on_random_port<Item, SinkItem>() -> anyhow::Result<(
-    impl Stream<Item = serde_transport::Transport<TcpStream, Item, SinkItem, Json<Item, SinkItem>>>,
+    impl Stream<
+        Item = serde_transport::Transport<
+            Framed<TcpStream, LengthDelimitedCodec>,
+            Item,
+            SinkItem,
+            Json<Item, SinkItem>,
+        >,
+    >,
     std::net::SocketAddr,
 )>
 where

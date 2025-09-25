@@ -176,6 +176,11 @@ where
         Self::new(Config::default(), transport)
     }
 
+    /// Returns the inner transport
+    pub fn into_inner(self) -> T {
+        self.transport.into_inner()
+    }
+
     /// Returns the inner transport over which messages are sent and received.
     pub fn get_ref(&self) -> &T {
         self.transport.get_ref()

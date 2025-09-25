@@ -14,30 +14,29 @@ use serde::{Deserialize, Serialize};
 use std::{error::Error, io, pin::Pin};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_serde::{Framed as SerdeFramed, *};
+use tokio_util::bytes::{Bytes, BytesMut};
 use tokio_util::codec::{Framed, length_delimited::LengthDelimitedCodec};
 
 /// A transport that serializes to, and deserializes from, a byte stream.
 #[pin_project]
 pub struct Transport<S, Item, SinkItem, Codec> {
     #[pin]
-    inner: SerdeFramed<Framed<S, LengthDelimitedCodec>, Item, SinkItem, Codec>,
+    inner: SerdeFramed<S, Item, SinkItem, Codec>,
 }
 
 impl<S, Item, SinkItem, Codec> Transport<S, Item, SinkItem, Codec> {
     /// Returns the inner transport over which messages are sent and received.
     pub fn get_ref(&self) -> &S {
-        self.inner.get_ref().get_ref()
+        self.inner.get_ref()
     }
 }
 
-impl<S, Item, SinkItem, Codec, CodecError> Stream for Transport<S, Item, SinkItem, Codec>
+impl<S, Item, SinkItem, Codec> Stream for Transport<S, Item, SinkItem, Codec>
 where
-    S: AsyncWrite + AsyncRead,
+    S: TryStream<Ok = BytesMut>,
     Item: for<'a> Deserialize<'a>,
     Codec: Deserializer<Item>,
-    CodecError: Into<Box<dyn std::error::Error + Send + Sync>>,
-    SerdeFramed<Framed<S, LengthDelimitedCodec>, Item, SinkItem, Codec>:
-        Stream<Item = Result<Item, CodecError>>,
+    S::Error: From<Codec::Error> + Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     type Item = io::Result<Item>;
 
@@ -46,14 +45,13 @@ where
     }
 }
 
-impl<S, Item, SinkItem, Codec, CodecError> Sink<SinkItem> for Transport<S, Item, SinkItem, Codec>
+impl<S, Item, SinkItem, Codec> Sink<SinkItem> for Transport<S, Item, SinkItem, Codec>
 where
-    S: AsyncWrite,
+    S: Sink<Bytes>,
+    S::Error: Error + Send + Sync + 'static,
     SinkItem: Serialize,
     Codec: Serializer<SinkItem>,
-    CodecError: Into<Box<dyn Error + Send + Sync>>,
-    SerdeFramed<Framed<S, LengthDelimitedCodec>, Item, SinkItem, Codec>:
-        Sink<SinkItem, Error = CodecError>,
+    Codec::Error: Into<S::Error>,
 {
     type Error = io::Error;
 
@@ -88,11 +86,10 @@ where
 
 /// Constructs a new transport from a framed transport and a serialization codec.
 pub fn new<S, Item, SinkItem, Codec>(
-    framed_io: Framed<S, LengthDelimitedCodec>,
+    framed_io: S,
     codec: Codec,
 ) -> Transport<S, Item, SinkItem, Codec>
 where
-    S: AsyncWrite + AsyncRead,
     Item: for<'de> Deserialize<'de>,
     SinkItem: Serialize,
     Codec: Serializer<SinkItem> + Deserializer<Item>,
@@ -102,7 +99,8 @@ where
     }
 }
 
-impl<S, Item, SinkItem, Codec> From<(S, Codec)> for Transport<S, Item, SinkItem, Codec>
+impl<S, Item, SinkItem, Codec> From<(S, Codec)>
+    for Transport<Framed<S, LengthDelimitedCodec>, Item, SinkItem, Codec>
 where
     S: AsyncWrite + AsyncRead,
     Item: for<'de> Deserialize<'de>,
@@ -126,7 +124,9 @@ pub mod tcp {
         tokio_util::codec::length_delimited,
     };
 
-    impl<Item, SinkItem, Codec> Transport<TcpStream, Item, SinkItem, Codec> {
+    impl<Item, SinkItem, Codec>
+        Transport<Framed<TcpStream, LengthDelimitedCodec>, Item, SinkItem, Codec>
+    {
         /// Returns the peer address of the underlying TcpStream.
         pub fn peer_addr(&self) -> io::Result<SocketAddr> {
             self.inner.get_ref().get_ref().peer_addr()
@@ -156,7 +156,8 @@ pub mod tcp {
         Codec: Serializer<SinkItem> + Deserializer<Item>,
         CodecFn: Fn() -> Codec,
     {
-        type Output = io::Result<Transport<TcpStream, Item, SinkItem, Codec>>;
+        type Output =
+            io::Result<Transport<Framed<TcpStream, LengthDelimitedCodec>, Item, SinkItem, Codec>>;
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
             let io = ready!(self.as_mut().project().inner.poll(cx))?;
@@ -265,7 +266,8 @@ pub mod tcp {
         Codec: Serializer<SinkItem> + Deserializer<Item>,
         CodecFn: Fn() -> Codec,
     {
-        type Item = io::Result<Transport<TcpStream, Item, SinkItem, Codec>>;
+        type Item =
+            io::Result<Transport<Framed<TcpStream, LengthDelimitedCodec>, Item, SinkItem, Codec>>;
 
         fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             let conn: TcpStream =
@@ -290,7 +292,9 @@ pub mod unix {
         tokio_util::codec::length_delimited,
     };
 
-    impl<Item, SinkItem, Codec> Transport<UnixStream, Item, SinkItem, Codec> {
+    impl<Item, SinkItem, Codec>
+        Transport<Framed<UnixStream, LengthDelimitedCodec>, Item, SinkItem, Codec>
+    {
         /// Returns the socket address of the remote half of the underlying [`UnixStream`].
         pub fn peer_addr(&self) -> io::Result<SocketAddr> {
             self.inner.get_ref().get_ref().peer_addr()
@@ -320,7 +324,8 @@ pub mod unix {
         Codec: Serializer<SinkItem> + Deserializer<Item>,
         CodecFn: Fn() -> Codec,
     {
-        type Output = io::Result<Transport<UnixStream, Item, SinkItem, Codec>>;
+        type Output =
+            io::Result<Transport<Framed<UnixStream, LengthDelimitedCodec>, Item, SinkItem, Codec>>;
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
             let io = ready!(self.as_mut().project().inner.poll(cx))?;
@@ -431,7 +436,8 @@ pub mod unix {
         Codec: Serializer<SinkItem> + Deserializer<Item>,
         CodecFn: Fn() -> Codec,
     {
-        type Item = io::Result<Transport<UnixStream, Item, SinkItem, Codec>>;
+        type Item =
+            io::Result<Transport<Framed<UnixStream, LengthDelimitedCodec>, Item, SinkItem, Codec>>;
 
         fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             let conn: UnixStream = ready!(self.as_mut().project().listener.poll_accept(cx)?).0;
@@ -649,7 +655,7 @@ mod tests {
             Poll::Ready(Ok(()))
         );
         assert_eq!(
-            transport.get_ref().0.get_ref(),
+            transport.get_ref().get_ref().0.get_ref(),
             b"\x00\x00\x00\x18\"Test one, check check.\""
         );
     }
