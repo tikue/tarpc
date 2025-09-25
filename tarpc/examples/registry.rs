@@ -156,18 +156,19 @@ with_services!(s0: S0, s1: S1, s2: S2, s3: S3, s4: S4, s5: S5, s6: S6, s7: S7, s
     S10, s11: S11, s12: S12, s13: S13, s14: S14, s15: S15, s16: S16, s17: S17, s18: S18, s19: S19,
     s20: S20);
 
-fn deserialize<T>(bytes: ByteBuf) -> Result<T, bincode::Error>
+fn deserialize<T>(bytes: ByteBuf) -> Result<T, bincode::error::DecodeError>
 where
     T: for<'a> Deserialize<'a>,
 {
-    bincode::deserialize(&*bytes)
+    let (t, _) = bincode::serde::decode_from_slice(&bytes, bincode::config::standard())?;
+    Ok(t)
 }
 
-fn serialize<T>(t: T) -> Result<ByteBuf, bincode::Error>
+fn serialize<T>(t: T) -> Result<ByteBuf, bincode::error::EncodeError>
 where
     T: Serialize,
 {
-    let bytes = bincode::serialize(&t)?;
+    let bytes = bincode::serde::encode_to_vec(&t, bincode::config::standard())?;
     Ok(ByteBuf::from(bytes))
 }
 
@@ -297,11 +298,12 @@ impl Goodbye for GoodbyeServer {
 
 #[tokio::main]
 async fn main() {
-    let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), 13241);
-    tokio::spawn(async move {
-        let mut listener = serde_transport::tcp::listen(&server_addr, Json::default)
+    let mut listener =
+        serde_transport::tcp::listen(&(IpAddr::V6(Ipv6Addr::LOCALHOST), 0), Json::default)
             .await
             .unwrap();
+    let server_addr = listener.local_addr();
+    tokio::spawn(async move {
         let transport = listener.next().await.unwrap().unwrap();
         let channel = BaseChannel::with_defaults(transport);
         let registry = ServiceRegistry.with_services((
